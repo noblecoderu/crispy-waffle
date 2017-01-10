@@ -10,15 +10,7 @@ from aiohttp import web
 
 from crispywaffle.client import ClientQueue, match_client_queue
 
-LISTEN_SECRET = os.environ.get("LISTEN_SECRET")
-SEND_SECRET = os.environ.get("SEND_SECRET")
-
-print(jwt.encode({}, LISTEN_SECRET, algorithm='HS256'))
-print(jwt.encode({}, SEND_SECRET, algorithm='HS256'))
-
 CRISPY_LOGGER = logging.getLogger("crispy")
-
-SHUTDOWN = asyncio.Event()
 
 
 def get_utc_timestamp() -> int:
@@ -48,7 +40,7 @@ def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] 
 async def listen_stream(request: web.Request) -> web.WebSocketResponse:
     CRISPY_LOGGER.debug("Client loop started")
 
-    data = get_signed_data(request, LISTEN_SECRET, require_exp=True)
+    data = get_signed_data(request, request.app.listen_secret, require_exp=True)
 
     websocket = web.WebSocketResponse()
     await websocket.prepare(request)
@@ -74,10 +66,10 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
     CRISPY_LOGGER.debug("Client loop started")
     with ClientQueue(filters) as query:  # type: asyncio.Queue
-        while not (stop_event.is_set() or SHUTDOWN.is_set()):
+        while not (stop_event.is_set() or request.app.shutdown_event.is_set()):
             event_poll = asyncio.Task(stop_event.wait())
             queue_get = asyncio.Task(query.get())
-            shutdown_poll = asyncio.Task(SHUTDOWN.wait())
+            shutdown_poll = asyncio.Task(request.app.shutdown_event.wait())
 
             try:
                 done, pending = await asyncio.wait(
@@ -129,7 +121,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
 
 async def send_message(request: web.Request) -> web.Response:
-    data = get_signed_data(request, SEND_SECRET)
+    data = get_signed_data(request, request.app.send_secret)
     message = await request.json()
 
     filters = data.get("fil")
@@ -147,14 +139,23 @@ async def send_message(request: web.Request) -> web.Response:
     })
 
 
-async def on_shutdown(_: web.Application):
-    SHUTDOWN.set()
+async def on_shutdown(app: web.Application):
+    app.shutdown_event.set()
 
 
 application = web.Application()  # pylint: disable=invalid-name
 application.on_shutdown.append(on_shutdown)
 application.router.add_post('/message', send_message)
 application.router.add_get('/message', listen_stream)
+
+
+application.listen_secret = os.environ.get("LISTEN_SECRET").strip()
+application.send_secret = os.environ.get("SEND_SECRET").strip()
+
+application.shutdown_event = asyncio.Event()
+
+print(jwt.encode({}, application.listen_secret, algorithm='HS256'))
+print(jwt.encode({}, application.send_secret, algorithm='HS256'))
 
 
 def run() -> None:
