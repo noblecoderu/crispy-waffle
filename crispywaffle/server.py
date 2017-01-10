@@ -65,10 +65,15 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
         CRISPY_LOGGER.debug("Client disconnected, expiration too soon")
         raise web.HTTPBadRequest(text="Expiration too soon")
 
+    filters = data.get("fil")
+    if not isinstance(filters, dict):
+        CRISPY_LOGGER.debug("Client disconnected, invalid filters")
+        raise web.HTTPBadRequest(text="Invalid filters")
+
     asyncio.get_event_loop().call_later(exp - now, client_loop_stop)
 
     CRISPY_LOGGER.debug("Client loop started")
-    with ClientQueue(data) as query:  # type: asyncio.Queue
+    with ClientQueue(filters) as query:  # type: asyncio.Queue
         while not (stop_event.is_set() or SHUTDOWN.is_set()):
             event_poll = asyncio.Task(stop_event.wait())
             queue_get = asyncio.Task(query.get())
@@ -124,16 +129,20 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
 
 async def send_message(request: web.Request) -> web.Response:
-    props = get_signed_data(request, SEND_SECRET)
-    data = await request.json()
+    data = get_signed_data(request, SEND_SECRET)
+    message = await request.json()
 
-    clients = match_client_queue(props)
+    filters = data.get("fil")
+    if not isinstance(filters, dict):
+        raise web.HTTPBadRequest(text="Invalid filters")
+
+    clients = match_client_queue(filters)
 
     if clients:
         tasks = []
 
         for client in clients:
-            tasks.append(asyncio.Task(client.put(data)))
+            tasks.append(asyncio.Task(client.put(message)))
 
         await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
 
