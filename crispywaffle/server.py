@@ -96,7 +96,10 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
                 result = None
 
             if result is True:
-                CRISPY_LOGGER.debug("WebSocket closed by global shutdown")
+                if stop_event.is_set():
+                    CRISPY_LOGGER.debug("WebSocket closed by session timeout")
+                else:
+                    CRISPY_LOGGER.debug("WebSocket closed by global shutdown")
                 break
 
             if websocket.closed:
