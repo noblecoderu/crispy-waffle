@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import os
-from typing import Set, Tuple  # pylint: disable=unused-import
+from calendar import timegm
+from datetime import datetime
+from typing import Optional, Set, Tuple  # pylint: disable=unused-import
 
 import jwt
 from aiohttp import web
@@ -19,7 +21,11 @@ CRISPY_LOGGER = logging.getLogger("crispy")
 SHUTDOWN = asyncio.Event()
 
 
-def get_signed_data(request: web.Request, key: str) -> dict:
+def get_utc_timestamp() -> int:
+    return timegm(datetime.utcnow().utctimetuple())
+
+
+def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] = None) -> dict:
     token = request.rel_url.query.get("token")  # type: str
 
     if not token:
@@ -28,9 +34,13 @@ def get_signed_data(request: web.Request, key: str) -> dict:
 
     try:
         data = jwt.decode(token, key, algorithms=['HS256'])
-    except jwt.DecodeError as error:
+    except (jwt.DecodeError, jwt.ExpiredSignatureError) as error:
         CRISPY_LOGGER.debug("Client disconnected, invalid token (%s)", error)
-        raise web.HTTPBadRequest(text="Invalid token")
+        raise web.HTTPBadRequest(text="Invalid token: {}".format(error))
+
+    if require_exp and "exp" not in data:
+        CRISPY_LOGGER.debug("Client disconnected, no exp provided")
+        raise web.HTTPBadRequest(text="No exp provided")
 
     return data
 
@@ -38,7 +48,7 @@ def get_signed_data(request: web.Request, key: str) -> dict:
 async def listen_stream(request: web.Request) -> web.WebSocketResponse:
     CRISPY_LOGGER.debug("Client loop started")
 
-    data = get_signed_data(request, LISTEN_SECRET)
+    data = get_signed_data(request, LISTEN_SECRET, require_exp=True)
 
     websocket = web.WebSocketResponse()
     await websocket.prepare(request)
@@ -48,7 +58,14 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
     def client_loop_stop() -> None:
         stop_event.set()
 
-    asyncio.get_event_loop().call_later(5, client_loop_stop)
+    exp: int = data["exp"]
+    now: int = get_utc_timestamp()
+
+    if exp - now < 5:
+        CRISPY_LOGGER.debug("Client disconnected, expiration too soon")
+        raise web.HTTPBadRequest(text="Expiration too soon")
+
+    asyncio.get_event_loop().call_later(exp - now, client_loop_stop)
 
     CRISPY_LOGGER.debug("Client loop started")
     with ClientQueue(data) as query:  # type: asyncio.Queue
