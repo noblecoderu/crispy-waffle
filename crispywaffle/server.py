@@ -138,16 +138,11 @@ async def send_message(request: web.Request) -> web.Response:
 
     clients = match_client_queue(filters)
 
-    if clients:
-        tasks = []
-
-        for client in clients:
-            tasks.append(asyncio.Task(client.put(message)))
-
-        await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+    for client in clients:
+        asyncio.ensure_future(client.put(message))
 
     return web.json_response({
-        "completed": True,
+        "queued": True,
         "clients": len(clients)
     })
 
