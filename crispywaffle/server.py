@@ -66,18 +66,19 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
     CRISPY_LOGGER.debug("Client loop started")
     with ClientQueue(filters) as query:  # type: asyncio.Queue
         while not (stop_event.is_set() or request.app.shutdown_event.is_set()):
-            event_poll = asyncio.Task(stop_event.wait())
             queue_get = asyncio.Task(query.get())
+
+            stop_event_poll = asyncio.Task(stop_event.wait())
             shutdown_poll = asyncio.Task(request.app.shutdown_event.wait())
 
             try:
                 done, pending = await asyncio.wait(
-                    [shutdown_poll, event_poll, queue_get],
+                    [shutdown_poll, stop_event_poll, queue_get],
                     return_when=asyncio.FIRST_COMPLETED
                 )  # type: Tuple[Set[asyncio.Future], Set[asyncio.Future]]
             except asyncio.CancelledError:
                 shutdown_poll.cancel()
-                event_poll.cancel()
+                stop_event_poll.cancel()
                 queue_get.cancel()
                 CRISPY_LOGGER.debug("WebSocket closed by client")
                 break
