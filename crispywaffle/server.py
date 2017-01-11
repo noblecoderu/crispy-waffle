@@ -38,6 +38,13 @@ def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] 
     return data
 
 
+async def ping_loop(websocket: web.WebSocketResponse) -> None:
+    while not websocket.closed:
+        CRISPY_LOGGER.debug("Sending ping to client")
+        websocket.ping()
+        await asyncio.sleep(10)
+
+
 async def listen_stream(request: web.Request) -> web.WebSocketResponse:
     data = get_signed_data(request, request.app.listen_secret, require_exp=True)
 
@@ -62,6 +69,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
         raise web.HTTPBadRequest(text="Invalid filters")
 
     asyncio.get_event_loop().call_later(exp - now, client_loop_stop)
+    asyncio.ensure_future(ping_loop(websocket))
 
     CRISPY_LOGGER.debug("Client loop started")
     with ClientQueue(filters) as query:  # type: asyncio.Queue
