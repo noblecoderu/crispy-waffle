@@ -3,7 +3,7 @@ from asyncio import Queue
 from typing import Dict, List, Tuple
 
 CLIENT_QUEUES = []  # type: List[Tuple[Dict[str, str], Queue]]
-QUEUE_LOGGER = logging.getLogger("crispy.client")
+QUEUE_LOGGER = logging.getLogger("crispy.ClientQueue")
 
 
 class ClientQueue:  # pylint: disable=too-few-public-methods
