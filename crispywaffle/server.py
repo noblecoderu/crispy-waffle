@@ -19,7 +19,7 @@ def get_utc_timestamp() -> int:
 
 
 def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] = None) -> dict:
-    token = request.rel_url.query.get("token")  # type: str
+    token: str = request.rel_url.query.get("token")
 
     if not token:
         CRISPY_LOGGER.debug("Client disconnected, no token")
