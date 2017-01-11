@@ -53,9 +53,6 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
     stop_event = asyncio.Event()
 
-    def client_loop_stop() -> None:
-        stop_event.set()
-
     exp: int = data["exp"]
     now: int = get_utc_timestamp()
 
@@ -68,7 +65,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
         CRISPY_LOGGER.debug("Client disconnected, invalid filters")
         raise web.HTTPBadRequest(text="Invalid filters")
 
-    asyncio.get_event_loop().call_later(exp - now, client_loop_stop)
+    stop_handle = asyncio.get_event_loop().call_later(exp - now, lambda: stop_event.set())
     asyncio.ensure_future(ping_loop(websocket))
 
     CRISPY_LOGGER.debug("Client loop started")
@@ -121,6 +118,8 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
         pass
     except Exception:  # pylint: disable=broad-except
         CRISPY_LOGGER.exception("Error closing client connection")
+
+    stop_handle.cancel()
 
     CRISPY_LOGGER.debug("Client loop finished")
     return websocket
