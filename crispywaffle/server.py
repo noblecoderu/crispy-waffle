@@ -1,6 +1,7 @@
+import argparse
 import asyncio
+import json
 import logging
-import os
 from calendar import timegm
 from datetime import datetime
 from typing import Optional, Set, Tuple  # pylint: disable=unused-import
@@ -149,20 +150,32 @@ application.on_shutdown.append(on_shutdown)
 application.router.add_post('/message', send_message)
 application.router.add_get('/message', listen_stream)
 
-
-application.listen_secret = os.environ.get("LISTEN_SECRET").strip()
-application.send_secret = os.environ.get("SEND_SECRET").strip()
-
 application.shutdown_event = asyncio.Event()
-
-print(jwt.encode({}, application.listen_secret, algorithm='HS256'))
-print(jwt.encode({}, application.send_secret, algorithm='HS256'))
 
 
 def run() -> None:
+    parser = argparse.ArgumentParser("Message queue with JWT authentication")
+    parser.add_argument("--listen", dest="listen_secret", required=True)
+    parser.add_argument("--send", dest="send_secret", required=True)
+
+    args = parser.parse_args()
+
+    application.listen_secret = args.listen_secret
+    application.send_secret = args.send_secret
+
     logging.basicConfig(level=logging.DEBUG)
     web.run_app(application)
 
+
+def utils() -> None:
+    parser = argparse.ArgumentParser("Message queue with JWT authentication")
+    parser.add_argument("--secret", dest="secret", required=True)
+    parser.add_argument("--sign", dest="message", required=True)
+
+    args = parser.parse_args()
+    data = json.loads(args.message)
+
+    print(jwt.encode(data, args.secret.strip(), algorithm="HS256"))
 
 if __name__ == "__main__":
     run()
