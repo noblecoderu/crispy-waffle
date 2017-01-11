@@ -39,8 +39,6 @@ def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] 
 
 
 async def listen_stream(request: web.Request) -> web.WebSocketResponse:
-    CRISPY_LOGGER.debug("Client loop started")
-
     data = get_signed_data(request, request.app.listen_secret, require_exp=True)
 
     websocket = web.WebSocketResponse()
