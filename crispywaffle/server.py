@@ -90,7 +90,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
             try:
                 result = completed_task.result()
             except RuntimeError:
-                result = None
+                continue
 
             if result is True:
                 if stop_event.is_set():
@@ -103,19 +103,16 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
                 CRISPY_LOGGER.debug("WebSocket closed by client")
                 break
 
-            if result is None:
-                CRISPY_LOGGER.debug("WebSocket closed by timeout")
-                # noinspection PyBroadException
-                try:
-                    await websocket.close()
-                except RuntimeError:
-                    pass
-                except Exception:  # pylint: disable=broad-except
-                    CRISPY_LOGGER.exception("Error closing client connection")
-                break
-
             CRISPY_LOGGER.debug("Sending data to client")
             websocket.send_json(result)
+
+    # noinspection PyBroadException
+    try:
+        await websocket.close()
+    except RuntimeError:
+        pass
+    except Exception:  # pylint: disable=broad-except
+        CRISPY_LOGGER.exception("Error closing client connection")
 
     CRISPY_LOGGER.debug("Client loop finished")
     return websocket
