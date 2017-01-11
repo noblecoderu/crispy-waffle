@@ -38,11 +38,11 @@ def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] 
     return data
 
 
-async def ping_loop(websocket: web.WebSocketResponse) -> None:
+async def ping_loop(websocket: web.WebSocketResponse, delay: int = 10) -> None:
     while not websocket.closed:
         CRISPY_LOGGER.debug("Sending ping to client")
         websocket.ping()
-        await asyncio.sleep(10)
+        await asyncio.sleep(delay)
 
 
 async def listen_stream(request: web.Request) -> web.WebSocketResponse:
