@@ -66,7 +66,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
         raise web.HTTPBadRequest(text="Invalid filters")
 
     stop_handle = asyncio.get_event_loop().call_later(exp - now, lambda: stop_event.set())
-    asyncio.ensure_future(ping_loop(websocket))
+    asyncio.ensure_future(ping_loop(websocket, request.app.ping_delay))
 
     CRISPY_LOGGER.debug("Client loop started")
     with ClientQueue(filters) as query:  # type: asyncio.Queue
@@ -160,11 +160,13 @@ def run() -> None:
     parser = argparse.ArgumentParser("Message queue with JWT authentication")
     parser.add_argument("--listen", dest="listen_secret", required=True)
     parser.add_argument("--send", dest="send_secret", required=True)
+    parser.add_argument("--ping-delay", dest="ping_delay", type=int, default=10)
 
     args = parser.parse_args()
 
     application.listen_secret = args.listen_secret
     application.send_secret = args.send_secret
+    application.ping_delay = args.ping_delay
 
     logging.basicConfig(level=logging.DEBUG)
     web.run_app(application)
