@@ -105,6 +105,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
             if result is None:
                 CRISPY_LOGGER.debug("WebSocket closed by timeout")
+                # noinspection PyBroadException
                 try:
                     await websocket.close()
                 except RuntimeError:
