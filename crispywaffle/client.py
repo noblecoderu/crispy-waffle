@@ -1,6 +1,6 @@
 import logging
 from asyncio import Queue
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Iterable
 
 CLIENT_QUEUES = []  # type: List[Tuple[Dict[str, str], Queue]]
 QUEUE_LOGGER = logging.getLogger("crispy.ClientQueue")
@@ -24,7 +24,7 @@ class ClientQueue:  # pylint: disable=too-few-public-methods
         CLIENT_QUEUES.remove(self._info_q_pair)
 
 
-def match_client_queue(properties: Dict[str, str]) -> List[Queue]:
+def match_client_queue(properties: Dict[str, str]) -> Iterable[Queue]:
     def predicate(client: Tuple[Dict[str, str], Queue]):
         for key, value in properties.items():
             if key not in client[0]:
@@ -33,7 +33,5 @@ def match_client_queue(properties: Dict[str, str]) -> List[Queue]:
                 return False
         return True
 
-    return [
-        _[1]
-        for _ in filter(predicate, CLIENT_QUEUES)
-    ]
+    for _ in filter(predicate, CLIENT_QUEUES):
+        yield _[1]
