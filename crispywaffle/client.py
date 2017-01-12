@@ -8,7 +8,7 @@ QUEUE_LOGGER = logging.getLogger("crispy.ClientQueue")
 JSONSerializable = TypeVar("JSONSerializable", dict, list, int, float, None)
 
 
-class ClientQueue:  # pylint: disable=too-few-public-methods
+class ClientQueue:
 
     def __init__(self, filters: Dict[str, str]) -> None:
         self.filters = filters
