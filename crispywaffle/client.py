@@ -1,37 +1,33 @@
 import logging
 from asyncio import Queue
-from typing import Dict, List, Tuple, Iterable
+from typing import Dict, Iterable, List
 
-CLIENT_QUEUES = []  # type: List[Tuple[Dict[str, str], Queue]]
+CLIENT_QUEUES: List["ClientQueue"] = []
 QUEUE_LOGGER = logging.getLogger("crispy.ClientQueue")
 
 
 class ClientQueue:  # pylint: disable=too-few-public-methods
 
-    def __init__(self, data: Dict[str, str]) -> None:
-        self.data = data
-        self._info_q_pair = None  # type: Tuple[Dict[str, str], Queue]
+    def __init__(self, filters: Dict[str, str]) -> None:
+        self.filters = filters
+        self.queue = Queue()
 
     def __enter__(self) -> Queue:
-        _client_q = Queue()  # type: Queue
-        self._info_q_pair = (self.data, _client_q)
-        QUEUE_LOGGER.debug("Registering client %s", self.data)
-        CLIENT_QUEUES.append(self._info_q_pair)
-        return _client_q
+        QUEUE_LOGGER.debug("Registering client %s", self.filters)
+        CLIENT_QUEUES.append(self)
+        return self.queue
 
     def __exit__(self, *args) -> None:
-        QUEUE_LOGGER.debug("Removing client %s", self.data)
-        CLIENT_QUEUES.remove(self._info_q_pair)
+        QUEUE_LOGGER.debug("Removing client %s", self.filters)
+        CLIENT_QUEUES.remove(self)
 
-
-def match_client_queue(properties: Dict[str, str]) -> Iterable[Queue]:
-    def predicate(client: Tuple[Dict[str, str], Queue]):
+    def match(self, properties: Dict[str, str]) -> bool:
         for key, value in properties.items():
-            if key not in client[0]:
-                return False
-            if client[0][key] != value:
+            if key not in self.filters or self.filters[key] != value:
                 return False
         return True
 
-    for _ in filter(predicate, CLIENT_QUEUES):
+
+def match_client_queue(properties: Dict[str, str]) -> Iterable[Queue]:
+    for _ in filter(lambda c: c.match(properties), CLIENT_QUEUES):
         yield _[1]
