@@ -127,21 +127,33 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
 async def send_message(request: web.Request) -> web.Response:
     data = get_signed_data(request, request.app.send_secret)
+
+    signed_filters: dict = data.get("fil")
+    if signed_filters and not isinstance(signed_filters, dict):
+        raise web.HTTPBadRequest(text="Invalid signed filters")
+    else:
+        signed_filters = {}
+
     message = await request.json()
+    if not isinstance(message, dict):
+        raise web.HTTPBadRequest(text="Invalid message body")
 
-    filters = data.get("fil")
-    if not isinstance(filters, dict):
-        raise web.HTTPBadRequest(text="Invalid filters")
+    if "val" not in message:
+        raise web.HTTPBadRequest(text="No message value provided")
+    value = message["value"]
 
-    clients = match_client_queue(filters)
+    custom_filters: dict = message.get("fil")
+    if custom_filters and not isinstance(custom_filters, dict):
+        raise web.HTTPBadRequest(text="Invalid custom filters")
+    else:
+        custom_filters = {}
 
-    for client in clients:
-        asyncio.ensure_future(client.put(message))
+    custom_filters.update(signed_filters)
 
-    return web.json_response({
-        "queued": True,
-        "clients": len(clients)
-    })
+    for client in match_client_queue(custom_filters):
+        asyncio.ensure_future(client.put(value))
+
+    return web.json_response({"queued": True})
 
 
 async def on_shutdown(app: web.Application):
