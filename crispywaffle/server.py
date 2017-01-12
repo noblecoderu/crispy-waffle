@@ -1,6 +1,7 @@
+#!env/bin/python3
+
 import argparse
 import asyncio
-import json
 import logging
 from calendar import timegm
 from datetime import datetime
@@ -168,7 +169,7 @@ application.router.add_get('/message', listen_stream)
 application.shutdown_event = asyncio.Event()
 
 
-def run() -> None:
+def run_server() -> None:
     parser = argparse.ArgumentParser("Message queue with JWT authentication")
     parser.add_argument("--listen", dest="listen_secret", required=True)
     parser.add_argument("--send", dest="send_secret", required=True)
@@ -186,15 +187,5 @@ def run() -> None:
     web.run_app(application, host=args.host, port=args.port)
 
 
-def utils() -> None:
-    parser = argparse.ArgumentParser("Message queue with JWT authentication")
-    parser.add_argument("--secret", dest="secret", required=True)
-    parser.add_argument("--sign", dest="message", required=True)
-
-    args = parser.parse_args()
-    data = json.loads(args.message)
-
-    print(jwt.encode(data, args.secret.strip(), algorithm="HS256"))
-
 if __name__ == "__main__":
-    run()
+    run_server()

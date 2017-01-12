@@ -15,8 +15,8 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            "crispy-waffle = crispywaffle.server:run",
-            "crispy-utils = crispywaffle.server:utils"
+            "crispy-waffle = crispywaffle.server:run_server",
+            "crispy-utils = crispywaffle.utils:run_utils"
         ],
     },
 )
