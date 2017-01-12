@@ -2,7 +2,7 @@ import logging
 from asyncio import Queue
 from typing import Dict, Iterable, List, Any, TypeVar
 
-CLIENT_QUEUES: List[ClientQueue] = []
+CLIENT_QUEUES: List[Any] = []
 QUEUE_LOGGER = logging.getLogger("crispy.ClientQueue")
 
 JSONSerializable = TypeVar("JSONSerializable", dict, list, int, float, None)
