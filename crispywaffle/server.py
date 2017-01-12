@@ -141,7 +141,7 @@ async def send_message(request: web.Request) -> web.Response:
 
     if "val" not in message:
         raise web.HTTPBadRequest(text="No message value provided")
-    value = message["value"]
+    value = message["val"]
 
     custom_filters: dict = message.get("fil")
     if custom_filters and not isinstance(custom_filters, dict):
