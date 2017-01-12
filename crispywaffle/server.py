@@ -10,7 +10,7 @@ from typing import Optional, Set, Tuple  # pylint: disable=unused-import
 import jwt
 from aiohttp import web
 
-from crispywaffle.client import ClientQueue, match_client_queue
+from crispywaffle.client import ClientQueue, match_client
 
 CRISPY_LOGGER = logging.getLogger("crispy")
 
@@ -70,7 +70,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
     asyncio.ensure_future(ping_loop(websocket, request.app.ping_delay))
 
     CRISPY_LOGGER.debug("Client loop started")
-    with ClientQueue(filters) as query:  # type: asyncio.Queue
+    with ClientQueue(filters) as query:
         while not (stop_event.is_set() or request.app.shutdown_event.is_set()):
             queue_get = asyncio.Task(query.get())
 
@@ -151,8 +151,8 @@ async def send_message(request: web.Request) -> web.Response:
 
     custom_filters.update(signed_filters)
 
-    for client in match_client_queue(custom_filters):
-        asyncio.ensure_future(client.put(value))
+    for client in match_client(custom_filters):
+        client.put(value)
 
     return web.json_response({"queued": True})
 
