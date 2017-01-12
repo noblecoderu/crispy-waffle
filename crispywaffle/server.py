@@ -161,6 +161,8 @@ def run() -> None:
     parser.add_argument("--listen", dest="listen_secret", required=True)
     parser.add_argument("--send", dest="send_secret", required=True)
     parser.add_argument("--ping-delay", dest="ping_delay", type=int, default=10)
+    parser.add_argument("--host", dest="host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", dest="port", type=int, default=8080)
 
     args = parser.parse_args()
 
@@ -169,7 +171,7 @@ def run() -> None:
     application.ping_delay = args.ping_delay
 
     logging.basicConfig(level=logging.DEBUG)
-    web.run_app(application)
+    web.run_app(application, host=args.host, port=args.port)
 
 
 def utils() -> None:
