@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="crispywaffle",
-    version="0.0.1",
+    version="0.1.0",
     maintainer="Eugene Protozanov",
     maintainer_email="protozanov@noblecode.ru",
     description="WebSocket JSON Web Token Message Server",
