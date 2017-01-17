@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 from calendar import timegm
 from datetime import datetime
@@ -135,7 +136,13 @@ async def send_message(request: web.Request) -> web.Response:
     else:
         signed_filters = {}
 
-    message = await request.json()
+    try:
+        message = await request.json()
+    except json.JSONDecodeError as error:
+        CRISPY_LOGGER.debug("Message rejected, %s", error)
+        raise web.HTTPBadRequest(
+            text="Invalid message body: {}".format(error))
+
     if not isinstance(message, dict):
         raise web.HTTPBadRequest(text="Invalid message body")
 
