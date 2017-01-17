@@ -10,6 +10,7 @@ from typing import Optional, Set, Tuple  # pylint: disable=unused-import
 
 import jwt
 from aiohttp import web
+from aiohttp.helpers import AccessLogger
 
 from crispywaffle.client import ClientQueue, match_client
 
@@ -185,6 +186,19 @@ def run_server() -> None:
     parser.add_argument("--ping-delay", dest="ping_delay", type=int, default=10)
     parser.add_argument("--host", dest="host", type=str, default="0.0.0.0")
     parser.add_argument("--port", dest="port", type=int, default=8080)
+    parser.add_argument(
+        "--debug",
+        action="store_const", dest="loglevel",
+        const=logging.DEBUG, default=logging.INFO,
+    )
+    parser.add_argument(
+        "--logformat", dest="logformat",
+        type=str, default=logging.BASIC_FORMAT
+    )
+    parser.add_argument(
+        "--access-logformat", dest="access_logformat",
+        type=str, default=AccessLogger.LOG_FORMAT
+    )
 
     args = parser.parse_args()
 
@@ -192,8 +206,13 @@ def run_server() -> None:
     application.send_secret = args.send_secret
     application.ping_delay = args.ping_delay
 
-    logging.basicConfig(level=logging.DEBUG)
-    web.run_app(application, host=args.host, port=args.port)
+    logging.basicConfig(
+        level=args.loglevel,
+        format=args.logformat)
+    web.run_app(
+        application,
+        host=args.host, port=args.port,
+        access_log_format=args.access_logformat)
 
 
 if __name__ == "__main__":
