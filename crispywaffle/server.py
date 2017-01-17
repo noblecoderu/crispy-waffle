@@ -144,7 +144,9 @@ async def send_message(request: web.Request) -> web.Response:
             text="Invalid message body: {}".format(error))
 
     if not isinstance(message, dict):
-        raise web.HTTPBadRequest(text="Invalid message body")
+        raise web.HTTPBadRequest(
+            text="Invalid message body: expected dict, got {}".format(
+                type(message).__name__))
 
     if "val" not in message:
         raise web.HTTPBadRequest(text="No message value provided")
