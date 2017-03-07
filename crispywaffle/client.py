@@ -34,5 +34,16 @@ class ClientQueue:
 
 
 def match_client(properties: Dict[str, str]) -> Iterable[ClientQueue]:
-    for client in filter(lambda c: c.match(properties), CLIENT_QUEUES):
-        yield client
+    for client in CLIENT_QUEUES:
+        if client.match(properties):
+            QUEUE_LOGGER.debug(
+                "Matched client: %s against %s",
+                properties, client.filters
+            )
+            yield client
+        else:
+            QUEUE_LOGGER.debug(
+                "Ignored client: %s against %s",
+                properties, client.filters
+            )
+            yield client

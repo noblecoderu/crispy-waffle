@@ -149,6 +149,8 @@ async def send_message(request: web.Request) -> web.Response:
             text="Invalid message body: expected dict, got {}".format(
                 type(message).__name__))
 
+    CRISPY_LOGGER.debug("Received message: %s", message)
+
     if "val" not in message:
         raise web.HTTPBadRequest(text="No message value provided")
     value = message["val"]
