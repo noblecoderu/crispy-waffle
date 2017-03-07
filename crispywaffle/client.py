@@ -46,4 +46,3 @@ def match_client(properties: Dict[str, str]) -> Iterable[ClientQueue]:
                 "Ignored client: %s against %s",
                 properties, client.filters
             )
-            yield client
