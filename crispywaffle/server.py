@@ -156,8 +156,6 @@ async def send_message(request: web.Request) -> web.Response:
     custom_filters: dict = message.get("fil")
     if custom_filters and not isinstance(custom_filters, dict):
         raise web.HTTPBadRequest(text="Invalid custom filters")
-    else:
-        custom_filters = {}
 
     custom_filters.update(signed_filters)
 
