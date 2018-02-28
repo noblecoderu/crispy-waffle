@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="crispywaffle",
-    version="0.1.1",
+    version="0.2.0",
     maintainer="Eugene Protozanov",
     maintainer_email="protozanov@noblecode.ru",
     description="WebSocket JSON Web Token Message Server",
@@ -11,7 +11,9 @@ setup(
     include_package_data=True,
     install_requires=[
         "aiohttp==1.2.0",
-        "PyJWT==1.4.2"
+        "aioh2==0.2.2",
+        "PyJWT==1.4.2",
+        "PyYAML==3.12",
     ],
     entry_points={
         'console_scripts': [

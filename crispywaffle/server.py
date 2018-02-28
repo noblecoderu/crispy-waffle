@@ -4,21 +4,37 @@ import argparse
 import asyncio
 import json
 import logging
-from calendar import timegm
+import time
 from datetime import datetime
-from typing import Optional, Set, Tuple  # pylint: disable=unused-import
+from typing import Optional, Set, Tuple, NamedTuple  # pylint: disable=unused-import
 
 import jwt
 from aiohttp import web
 from aiohttp.helpers import AccessLogger
+import yaml
 
 from crispywaffle.client import ClientQueue, match_client
 
 CRISPY_LOGGER = logging.getLogger("crispy")
 
 
+class Config(NamedTuple):
+    listen_secret: str
+    send_secret: str
+    ping_delay: int
+    host: str
+    port: int
+    loglevel: int
+    logformat: str
+    access_logformat: str
+
+    apns_key_data: str
+    apns_key_issuer: str
+    apns_key_id: str
+
+
 def get_utc_timestamp() -> int:
-    return timegm(datetime.utcnow().utctimetuple())
+    return round(time.time())
 
 
 def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] = None) -> dict:
@@ -179,8 +195,9 @@ application.router.add_get('/message', listen_stream)
 application.shutdown_event = asyncio.Event()
 
 
-def run_server() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser("Message queue with JWT authentication")
+    parser.add_argument("--config", required=True, type=argparse.FileType('rb'))
     parser.add_argument("--listen", dest="listen_secret", required=True)
     parser.add_argument("--send", dest="send_secret", required=True)
     parser.add_argument("--ping-delay", dest="ping_delay", type=int, default=10)
@@ -200,11 +217,24 @@ def run_server() -> None:
         type=str, default=AccessLogger.LOG_FORMAT
     )
 
-    args = parser.parse_args()
 
-    application.listen_secret = args.listen_secret
-    application.send_secret = args.send_secret
-    application.ping_delay = args.ping_delay
+def _load_config(args):
+    yaml_config = yaml.safe_load(args.config)
+    cmd_config = vars(args).copy()
+    del cmd_config['config']
+    yaml_config.update(cmd_config)
+    return Config(**yaml_config)
+
+
+def run_server() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    config = _load_config(args)
+
+    application.config = config
+    application.listen_secret = config.listen_secret
+    application.send_secret = config.send_secret
+    application.ping_delay = config.ping_delay
 
     logging.basicConfig(
         level=args.loglevel,
