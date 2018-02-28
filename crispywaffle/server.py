@@ -14,23 +14,26 @@ from aiohttp.helpers import AccessLogger
 import yaml
 
 from crispywaffle.client import ClientQueue, match_client
+from crispywaffle.apns import APN_Client
 
 CRISPY_LOGGER = logging.getLogger("crispy")
 
 
 class Config(NamedTuple):
     listen_secret: str
-    send_secret: str
+    send_secret: str
     ping_delay: int
     host: str
-    port: int
-    loglevel: int
+    port: int
+    loglevel: int
     logformat: str
-    access_logformat: str
+    access_logformat: str
 
     apns_key_data: str
     apns_key_issuer: str
     apns_key_id: str
+    apns_id: str
+    apns_topic: str
 
 
 def get_utc_timestamp() -> int:
@@ -183,6 +186,60 @@ async def send_message(request: web.Request) -> web.Response:
     return web.json_response({"queued": True})
 
 
+async def apns_add_token(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except:
+        raise web.HTTPBadRequest(text='Invalid request')
+    if data.get('auth') != '4864c003-fdad-49ce-b00e-8d1a2d2774fd':
+        raise web.HTTPUnauthorized(text='Bad authorization')
+
+    try:
+        request.app.apns_tokens[data['user']] = data['token']
+    except KeyError:
+        raise web.HTTPBadRequest(text='Invalid request')
+
+    return web.json_response({})
+
+
+async def send_push(client, token, message, timeout):
+    if timeout:
+        await asyncio.sleep(timeout)
+    await client.send_message(token, message)
+
+
+async def apns_test_push(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except:
+        raise web.HTTPBadRequest(text='Invalid request')
+    if data.get('auth') != '4864c003-fdad-49ce-b00e-8d1a2d2774fd':
+        raise web.HTTPUnauthorized(text='Bad authorization')
+    try:
+        user = data['user']
+        message = data['message']
+    except KeyError:
+        raise web.HTTPBadRequest(text='Invalid request')
+    try:
+        token = request.app.apns_tokens[user]
+    except KeyError:
+        raise web.HTTPBadRequest(text='Missing token')
+    try:
+        timeout = float(data['timeout'])
+        assert 0 <= timeout <= 30
+    except (KeyError, AssertionError):
+        timeout = None
+
+    asyncio.ensure_future(send_push(
+        request.app.apn_client,
+        token,
+        message,
+        timeout
+    ))
+
+    return web.json_response({'status': 'ok', 'timeout': timeout})
+
+
 async def on_shutdown(app: web.Application):
     app.shutdown_event.set()
 
@@ -191,6 +248,8 @@ application = web.Application()  # pylint: disable=invalid-name
 application.on_shutdown.append(on_shutdown)
 application.router.add_post('/message', send_message)
 application.router.add_get('/message', listen_stream)
+application.router.add_post('/apns/add_token', apns_add_token)
+application.router.add_post('/apns/test_push', apns_test_push)
 
 application.shutdown_event = asyncio.Event()
 
@@ -216,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--access-logformat", dest="access_logformat",
         type=str, default=AccessLogger.LOG_FORMAT
     )
+    return parser
 
 
 def _load_config(args):
@@ -235,6 +295,9 @@ def run_server() -> None:
     application.listen_secret = config.listen_secret
     application.send_secret = config.send_secret
     application.ping_delay = config.ping_delay
+    application.apns_tokens = {}
+
+    application.apn_client = APN_Client(config)
 
     logging.basicConfig(
         level=args.loglevel,
