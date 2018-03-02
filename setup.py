@@ -12,7 +12,7 @@ setup(
     install_requires=[
         "aiohttp==1.2.0",
         "aioh2==0.2.2",
-        "PyJWT==1.4.2",
+        "PyJWT==1.5.3",
         "PyYAML==3.12",
     ],
     entry_points={

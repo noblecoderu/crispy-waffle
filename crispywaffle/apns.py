@@ -12,13 +12,15 @@ class APN_Client:
     def __init__(self, config):
         self.config = config
         self.connection = None
-        self.token = None
-        self.token_iat = 0
+
+        self._token = None
+        self._token_iat = 0
 
     def get_token(self) -> str:
         now = time.time()
-        if (now - self.token_iat) > 3600:
-            self.token = jwt.encode(
+        if (now - self._token_iat) > 3600:
+            self._token_iat = now
+            self._token = jwt.encode(
                 {
                     "iss": self.config.apns_key_issuer,
                     "iat": round(now)
@@ -27,7 +29,7 @@ class APN_Client:
                 headers={"kid": self.config.apns_key_id},
                 algorithm='ES256'
             ).decode()
-        return self.token
+        return self._token
 
     async def setup_connection(self):
         self.connection = await aioh2.open_connection(
@@ -50,7 +52,7 @@ class APN_Client:
             (':path', f'/3/device/{token}'),
             (':scheme', 'https'),
             ('host', 'api.push.apple.com'),
-            ('authorization', f"bearer {self.get_token()}"),
+            ('authorization', f'bearer {self.get_token()}'),
             ('apns-id', self.config.apns_id),
             ('apns-topic', self.config.apns_topic),
         ])

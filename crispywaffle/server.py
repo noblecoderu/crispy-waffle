@@ -190,14 +190,14 @@ async def apns_add_token(request: web.Request) -> web.Response:
     try:
         data = await request.json()
     except:
-        raise web.HTTPBadRequest(text='Invalid request')
+        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
     if data.get('auth') != '4864c003-fdad-49ce-b00e-8d1a2d2774fd':
-        raise web.HTTPUnauthorized(text='Bad authorization')
+        raise web.HTTPUnauthorized(text=json.dumps({'message': 'Bad authorization'}))
 
     try:
         request.app.apns_tokens[data['user']] = data['token']
     except KeyError:
-        raise web.HTTPBadRequest(text='Invalid request')
+        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
 
     return web.json_response({})
 
@@ -212,22 +212,22 @@ async def apns_test_push(request: web.Request) -> web.Response:
     try:
         data = await request.json()
     except:
-        raise web.HTTPBadRequest(text='Invalid request')
+        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
     if data.get('auth') != '4864c003-fdad-49ce-b00e-8d1a2d2774fd':
-        raise web.HTTPUnauthorized(text='Bad authorization')
+        raise web.HTTPUnauthorized(text=json.dumps({'message': 'Bad authorization'}))
     try:
         user = data['user']
         message = data['message']
     except KeyError:
-        raise web.HTTPBadRequest(text='Invalid request')
+        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
     try:
         token = request.app.apns_tokens[user]
     except KeyError:
-        raise web.HTTPBadRequest(text='Missing token')
+        raise web.HTTPBadRequest(text=json.dumps({'message': 'Missing token'}))
     try:
         timeout = float(data['timeout'])
         assert 0 <= timeout <= 30
-    except (KeyError, AssertionError):
+    except (TypeError, KeyError, AssertionError):
         timeout = None
 
     asyncio.ensure_future(send_push(
