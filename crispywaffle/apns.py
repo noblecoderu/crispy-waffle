@@ -8,7 +8,7 @@ from aiohttp import web
 import jwt
 
 
-class APN_Client:
+class APNS_Client:
     def __init__(self, config):
         self.config = config
         self.connection = None

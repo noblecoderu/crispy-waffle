@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from datetime import datetime
+import typing
 from typing import Optional, Set, Tuple, NamedTuple  # pylint: disable=unused-import
 
 import jwt
@@ -14,33 +15,78 @@ from aiohttp.helpers import AccessLogger
 import yaml
 
 from crispywaffle.client import ClientQueue, match_client
-from crispywaffle.apns import APN_Client
+from crispywaffle.apns import APNS_Client
 
 CRISPY_LOGGER = logging.getLogger("crispy")
 
 
-class Config(NamedTuple):
-    listen_secret: str
+class BaseConfig:
+    pass
+
+
+class ServerConfig(BaseConfig):
+    host: str = '0.0.0.0'
+    port: int = 8080
+    access_log_format: str = AccessLogger.LOG_FORMAT
+
+
+class WSConfig(BaseConfig):
+    ping_delay: int = 10
+    secret: str
+
+
+class APNSConfig(BaseConfig):
+    key_id: str
+    key_issuer: str
+    key_data: str
+    topic: str
+
+
+class Config(BaseConfig):
+    loglevel: int = logging.INFO
+    logformat: str = logging.BASIC_FORMAT
+
     send_secret: str
-    ping_delay: int
-    host: str
-    port: int
-    loglevel: int
-    logformat: str
-    access_logformat: str
-
-    apns_key_data: str
-    apns_key_issuer: str
-    apns_key_id: str
-    apns_id: str
-    apns_topic: str
+    server: ServerConfig
+    ws: WSConfig
+    apns: APNSConfig
 
 
-def get_utc_timestamp() -> int:
-    return round(time.time())
+def load_config(config, data):
+    fields = typing.get_type_hints(config)
+    for field, type_ in fields.items():
+        if field in data:
+            value = data[field]
+            if issubclass(type_, BaseConfig):
+                value = load_config(type_, data[field])
+            elif not isinstance(value, type_):
+                value = type_(value)
+            setattr(config, field, value)
+        elif issubclass(type_, BaseConfig):
+            setattr(config, field, type_())
+    return config
 
 
-def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] = None) -> dict:
+def validate_require(config):
+    fields = typing.get_type_hints(config)
+    for field, type_ in fields.items():
+        if not hasattr(config, field):
+            raise ValueError(f'Field {field} from {config} is required')
+        value = getattr(config, field)
+        if issubclass(type_, BaseConfig):
+            validate_require(value)
+        elif not isinstance(value, type_):
+            raise TypeError(
+                f'Field {field} from {config} have incorrect type.'
+                f'({type(value)} instead of {type_})'
+            )
+
+
+def get_signed_data(
+        request: web.Request,
+        key: str,
+        require_exp: Optional[bool] = None
+    ) -> dict:
     token: str = request.rel_url.query.get("token")
 
     if not token:
@@ -60,129 +106,188 @@ def get_signed_data(request: web.Request, key: str, require_exp: Optional[bool] 
     return data
 
 
-async def ping_loop(websocket: web.WebSocketResponse, delay: int = 10) -> None:
-    while not websocket.closed:
-        CRISPY_LOGGER.debug("Sending ping to client")
-        websocket.ping()
-        await asyncio.sleep(delay)
+class Message(NamedTuple):
+    payload: dict
+    filters: dict
 
 
-async def listen_stream(request: web.Request) -> web.WebSocketResponse:
-    data = get_signed_data(request, request.app.listen_secret, require_exp=True)
+class Client:
+    def __init__(self, filters: dict, channels: list = None):
+        self.filters = filters
+        if channels is not None:
+            self.channels = channels
+        else:
+            self.channels = []
 
-    websocket = web.WebSocketResponse()
-    await websocket.prepare(request)
+    def match(self, filters) -> bool:
+        for key, value in filters.items():
+            if key not in self.filters or self.filters[key] != value:
+                return False
+        return True
 
-    stop_event = asyncio.Event()
+    def send_message(self, message):
+        for channel in self.channels:
+            channel.send(message)
 
-    exp: int = data["exp"]
-    now: int = get_utc_timestamp()
 
-    if exp - now < 5:
-        CRISPY_LOGGER.debug("Client disconnected, expiration too soon")
-        raise web.HTTPBadRequest(text="Expiration too soon")
+class ClientPool:
+    def __init__(self):
+        self.unique = {}
+        self.anonimous = {}
 
-    filters = data.get("fil")
-    if not isinstance(filters, dict):
-        CRISPY_LOGGER.debug("Client disconnected, invalid filters")
-        raise web.HTTPBadRequest(text="Invalid filters")
+    def update_user(self, channel, filters):
+        if channel.uid is None:
+            self.anonimous[channel] = Client(filters, [channel])
+        else:
+            if channel.uid in self.unique:
+                client = self.unique[channel.uid]
+                client.filters = filters
+            else:
+                self.unique[channel.uid] = client = Client(filters)
+            client.channels.append(channel)
 
-    stop_handle = asyncio.get_event_loop().call_later(exp - now, lambda: stop_event.set())
-    asyncio.ensure_future(ping_loop(websocket, request.app.ping_delay))
+    def channel_gone(self, channel):
+        if channel.uid is None:
+            del self.anonimous[channel]
+        else:
+            client = self.unique[channel.uid]
+            client.channels.remove(channel)
+            if not client.channels:
+                del self.unique[channel.uid]
 
-    CRISPY_LOGGER.debug("Client loop started")
-    with ClientQueue(filters) as query:
-        while not (stop_event.is_set() or request.app.shutdown_event.is_set()):
-            queue_get = asyncio.Task(query.get())
+    def route_message(self, message):
+        for client in self.unique.values():
+            if client.match(message.filters):
+                client.send_message(message)
 
-            stop_event_poll = asyncio.Task(stop_event.wait())
-            shutdown_poll = asyncio.Task(request.app.shutdown_event.wait())
+        for client in self.anonimous.values():
+            if client.match(message.filters):
+                client.send_message(message)
 
-            try:
-                done, pending = await asyncio.wait(
-                    [shutdown_poll, stop_event_poll, queue_get],
-                    return_when=asyncio.FIRST_COMPLETED
-                )  # type: Tuple[Set[asyncio.Future], Set[asyncio.Future]]
-            except asyncio.CancelledError:
-                shutdown_poll.cancel()
-                stop_event_poll.cancel()
-                queue_get.cancel()
-                CRISPY_LOGGER.debug("WebSocket closed by client")
+
+class WSChannel:
+    def __init__(self, uid, ws, close_timeout):
+        self.uid = uid
+        self.ws = ws
+        self._queue = asyncio.Queue()
+        self._close = asyncio.Event()
+        self._close_task = asyncio.get_event_loop().call_later(
+            close_timeout, self._close.set
+        )
+
+    async def handle(self):
+        CRISPY_LOGGER.debug('Client loop started')
+        await self.ws.send_json({'test': 1})
+        receive = asyncio.ensure_future(self.ws.receive())
+        get_task = asyncio.ensure_future(self._queue.get())
+        closed = asyncio.ensure_future(self._close.wait())
+        while True:
+            done, pending = await asyncio.wait(
+                [receive, get_task, closed],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            done = done.pop()
+            if done is receive:
+                CRISPY_LOGGER.debug('Get data: %s', receive.result())
+                receive = asyncio.ensure_future(self.ws.receive())
+            elif done is get_task:
+                message = get_task.result()
+                await self.ws.send_json(message.payload)
+                get_task = asyncio.ensure_future(self._queue.get())
+            elif done is closed:
+                await self.ws.close()
                 break
 
-            for task in pending:
-                task.cancel()
-            completed_task = done.pop()
+    def close(self):
+        if self._close.is_set():
+            return
+        self._close_task.cancel()
+        self._close.set()
 
-            try:
-                result = completed_task.result()
-            except RuntimeError:
-                continue
+    def send(self, message):
+        self._queue.put_nowait(message)
 
-            if result is True:
-                if stop_event.is_set():
-                    CRISPY_LOGGER.debug("WebSocket closed by session timeout")
-                else:
-                    CRISPY_LOGGER.debug("WebSocket closed by global shutdown")
-                break
+    def client_gone(self):
+        self.close()
 
-            if websocket.closed:
-                CRISPY_LOGGER.debug("WebSocket closed by client")
-                break
 
-            CRISPY_LOGGER.debug("Sending data to client")
-            websocket.send_json(result)
+class WSProvider:
+    def __init__(self, config, client_pool):
+        self.config = config
+        self.client_pool = client_pool
+        self._sockets = []
 
-    # noinspection PyBroadException
-    try:
-        await websocket.close()
-    except RuntimeError:
-        pass
-    except Exception:  # pylint: disable=broad-except
-        CRISPY_LOGGER.exception("Error closing client connection")
+    async def ws_connect(self, request: web.Request):
+        CRISPY_LOGGER.debug('Connect request')
+        data = get_signed_data(
+            request,
+            self.config.secret,
+            require_exp=True
+        )
+        ws = web.WebSocketResponse(heartbeat=self.config.ping_delay)
+        if not ws.can_prepare(request).ok:
+            raise web.HTTPBadRequest(text='Can not prepare websocket')
+        await ws.prepare(request)
 
-    stop_handle.cancel()
+        exp = data['exp']
+        now = time.time()
 
-    CRISPY_LOGGER.debug("Client loop finished")
-    return websocket
+        filters = data.get('fil')
+        if not isinstance(filters, dict):
+            CRISPY_LOGGER.debug("Client disconnected, invalid filters")
+            raise web.HTTPBadRequest(text="Invalid filters")
+
+        uid = data.get('uid')
+        channel = WSChannel(uid, ws, exp-now)
+        self._sockets.append(channel)
+        self.client_pool.update_user(channel, filters)
+        try:
+            await channel.handle()
+        except asyncio.CancelledError:
+            CRISPY_LOGGER.debug('Cancelled')
+            self.client_pool.channel_gone(channel)
+        finally:
+            self._sockets.remove(channel)
+
+        if not ws.closed:
+            CRISPY_LOGGER.debug('Closed')
+            channel.close()
+        return ws
+
+    async def shutdown(self):
+        for socket in self._sockets:
+            socket.close()
 
 
 async def send_message(request: web.Request) -> web.Response:
-    data = get_signed_data(request, request.app.send_secret)
+    data = get_signed_data(request, request.app['config'].send_secret)
 
-    signed_filters: dict = data.get("fil")
+    signed_filters: dict = data.get('fil')
     if signed_filters and not isinstance(signed_filters, dict):
         raise web.HTTPBadRequest(text="Invalid signed filters")
     else:
         signed_filters = {}
 
     try:
-        message = await request.json()
-    except json.JSONDecodeError as error:
-        CRISPY_LOGGER.debug("Message rejected, %s", error)
-        raise web.HTTPBadRequest(
-            text="Invalid message body: {}".format(error))
+        payload = await request.json()
+        assert isinstance(payload, dict)
+    except (json.JSONDecodeError, AssertionError) as exc:
+        CRISPY_LOGGER.debug("Message rejected, %s", exc)
+        raise web.HTTPBadRequest(text=f'Invalid message body: {exc}')
 
-    if not isinstance(message, dict):
-        raise web.HTTPBadRequest(
-            text="Invalid message body: expected dict, got {}".format(
-                type(message).__name__))
+    CRISPY_LOGGER.debug('Received message: %s', payload)
 
-    CRISPY_LOGGER.debug("Received message: %s", message)
-
-    if "val" not in message:
+    if 'val' not in payload:
         raise web.HTTPBadRequest(text="No message value provided")
-    value = message["val"]
 
-    custom_filters: dict = message.get("fil")
+    custom_filters: dict = payload.get("fil") or {}
     if custom_filters and not isinstance(custom_filters, dict):
         raise web.HTTPBadRequest(text="Invalid custom filters")
 
     custom_filters.update(signed_filters)
+    message = Message(payload['val'], custom_filters)
 
-    for client in match_client(custom_filters):
-        client.put(value)
-
+    request.app['clients'].route_message(message)
     return web.json_response({"queued": True})
 
 
@@ -241,71 +346,50 @@ async def apns_test_push(request: web.Request) -> web.Response:
 
 
 async def on_shutdown(app: web.Application):
-    app.shutdown_event.set()
+    CRISPY_LOGGER.debug('Do shutdown')
+    await app['ws'].shutdown()
 
 
-application = web.Application()  # pylint: disable=invalid-name
-application.on_shutdown.append(on_shutdown)
-application.router.add_post('/message', send_message)
-application.router.add_get('/message', listen_stream)
-application.router.add_post('/apns/add_token', apns_add_token)
-application.router.add_post('/apns/test_push', apns_test_push)
-
-application.shutdown_event = asyncio.Event()
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser("Message queue with JWT authentication")
+def _load_config():
+    parser = argparse.ArgumentParser(
+        "Message queue with JWT authentication",
+        argument_default=argparse.SUPPRESS
+    )
     parser.add_argument("--config", required=True, type=argparse.FileType('rb'))
-    parser.add_argument("--listen", dest="listen_secret", required=True)
-    parser.add_argument("--send", dest="send_secret", required=True)
-    parser.add_argument("--ping-delay", dest="ping_delay", type=int, default=10)
-    parser.add_argument("--host", dest="host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", dest="port", type=int, default=8080)
     parser.add_argument(
         "--debug",
         action="store_const", dest="loglevel",
         const=logging.DEBUG, default=logging.INFO,
     )
-    parser.add_argument(
-        "--logformat", dest="logformat",
-        type=str, default=logging.BASIC_FORMAT
-    )
-    parser.add_argument(
-        "--access-logformat", dest="access_logformat",
-        type=str, default=AccessLogger.LOG_FORMAT
-    )
-    return parser
+    args = parser.parse_args()
 
-
-def _load_config(args):
-    yaml_config = yaml.safe_load(args.config)
-    cmd_config = vars(args).copy()
-    del cmd_config['config']
-    yaml_config.update(cmd_config)
-    return Config(**yaml_config)
+    config = load_config(Config(), yaml.safe_load(args.config))
+    config.loglevel = min(config.loglevel, args.loglevel)
+    validate_require(config)
+    return config
 
 
 def run_server() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-    config = _load_config(args)
-
-    application.config = config
-    application.listen_secret = config.listen_secret
-    application.send_secret = config.send_secret
-    application.ping_delay = config.ping_delay
-    application.apns_tokens = {}
-
-    application.apn_client = APN_Client(config)
+    config = _load_config()
 
     logging.basicConfig(
-        level=args.loglevel,
-        format=args.logformat)
+        level=config.loglevel,
+        format=config.logformat
+    )
+
+    application = web.Application()
+    application.on_shutdown.append(on_shutdown)
+
+    application['config'] = config
+    application['clients'] = client_pool = ClientPool()
+    application['ws'] = ws_provider = WSProvider(config.ws, client_pool)
+
+    application.router.add_get('/message', ws_provider.ws_connect)
+    application.router.add_post('/message', send_message)
+
     web.run_app(
-        application,
-        host=args.host, port=args.port,
-        access_log_format=args.access_logformat)
+        application, **vars(config.server)
+    )
 
 
 if __name__ == "__main__":
