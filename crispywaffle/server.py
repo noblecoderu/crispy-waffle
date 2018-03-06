@@ -351,20 +351,18 @@ async def on_shutdown(app: web.Application):
 
 
 def _load_config():
-    parser = argparse.ArgumentParser(
-        "Message queue with JWT authentication",
-        argument_default=argparse.SUPPRESS
-    )
-    parser.add_argument("--config", required=True, type=argparse.FileType('rb'))
+    parser = argparse.ArgumentParser("Message queue with JWT authentication")
     parser.add_argument(
-        "--debug",
-        action="store_const", dest="loglevel",
-        const=logging.DEBUG, default=logging.INFO,
+        "--config", required=True, type=argparse.FileType('rb')
+    )
+    parser.add_argument(
+        "--debug", action="store_const", dest="loglevel", const=logging.DEBUG
     )
     args = parser.parse_args()
 
     config = load_config(Config(), yaml.safe_load(args.config))
-    config.loglevel = min(config.loglevel, args.loglevel)
+    if args.loglevel is not None:
+        config.loglevel = args.loglevel
     validate_require(config)
     return config
 
