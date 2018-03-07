@@ -136,6 +136,7 @@ class ClientPool:
         self.anonimous = {}
 
     def update_user(self, channel, filters):
+        CRISPY_LOGGER.debug('Update user with uid %s', channel.uid)
         if channel.uid is None:
             self.anonimous[channel] = Client(filters, [channel])
         else:
@@ -147,13 +148,20 @@ class ClientPool:
             client.channels.append(channel)
 
     def channel_gone(self, channel):
-        if channel.uid is None:
-            del self.anonimous[channel]
-        else:
-            client = self.unique[channel.uid]
-            client.channels.remove(channel)
-            if not client.channels:
-                del self.unique[channel.uid]
+        try:
+            CRISPY_LOGGER.debug(
+                'Remove channel from user with uid %s', channel.uid
+            )
+            if channel.uid is None:
+                del self.anonimous[channel]
+            else:
+                client = self.unique[channel.uid]
+                client.channels.remove(channel)
+                if not client.channels:
+                    del self.unique[channel.uid]
+        except KeyError:
+            # workaround for disconnected clients
+            pass
 
     def route_message(self, message):
         for client in self.unique.values():
@@ -169,53 +177,68 @@ class WSChannel:
     def __init__(self, uid, ws, close_timeout):
         self.uid = uid
         self.ws = ws
+        self._close_timeout = close_timeout
         self._queue = asyncio.Queue()
-        self._close = asyncio.Event()
+        self._stopped = asyncio.Event()
+        self._close_task = None
+        self._read_task = None
+        self._ws_read = None
+
+    def __enter__(self):
         self._close_task = asyncio.get_event_loop().call_later(
-            close_timeout, self._close.set
+            self._close_timeout, self.close_nowait
         )
+        self._read_task = asyncio.ensure_future(self._queue.get())
+        self._ws_read = asyncio.ensure_future(self.ws.receive())
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        self._close_task.cancel()
+        self._stopped.set()
+        self._read_task.cancel()
+        self._ws_read.cancel()
+        if self.ws.closed:
+            self.ws.close()
+        if exception_type in (RuntimeError, asyncio.CancelledError):
+            return True
 
     async def handle(self):
         CRISPY_LOGGER.debug('Client loop started')
-        await self.ws.send_json({'test': 1})
-        receive = asyncio.ensure_future(self.ws.receive())
-        get_task = asyncio.ensure_future(self._queue.get())
-        closed = asyncio.ensure_future(self._close.wait())
         while True:
-            done, pending = await asyncio.wait(
-                [receive, get_task, closed],
+            done, _ = await asyncio.wait(
+                [self._read_task, self._ws_read],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             done = done.pop()
-            if done is receive:
-                CRISPY_LOGGER.debug('Get data: %s', receive.result())
-                receive = asyncio.ensure_future(self.ws.receive())
-            elif done is get_task:
-                message = get_task.result()
+            if done is self._read_task:
+                message = done.result()
                 await self.ws.send_json(message.payload)
-                get_task = asyncio.ensure_future(self._queue.get())
-            elif done is closed:
-                await self.ws.close()
-                break
+                self._read_task = asyncio.ensure_future(self._queue.get())
+            elif done is self._ws_read:
+                payload = done.result()
+                CRISPY_LOGGER.debug('Somewhy get data from websocket: %s',
+                                    payload)
+                self._ws_read = asyncio.ensure_future(self.ws.receive())
 
-    def close(self):
-        if self._close.is_set():
-            return
-        self._close_task.cancel()
-        self._close.set()
+    def close_nowait(self):
+        if not self.ws.closed:
+            self.ws.close()
+
+    async def close(self, timeout=None):
+        self.close()
+        return await self._close.wait(timeout=timeout)
 
     def send(self, message):
         self._queue.put_nowait(message)
 
     def client_gone(self):
-        self.close()
+        self.close_nowait()
 
 
 class WSProvider:
     def __init__(self, config, client_pool):
         self.config = config
         self.client_pool = client_pool
-        self._sockets = []
+        self._channels = []
 
     async def ws_connect(self, request: web.Request):
         CRISPY_LOGGER.debug('Connect request')
@@ -239,23 +262,17 @@ class WSProvider:
 
         uid = data.get('uid')
         channel = WSChannel(uid, ws, exp-now)
-        self._sockets.append(channel)
+        self._channels.append(channel)
         self.client_pool.update_user(channel, filters)
-        try:
+        with channel:
             await channel.handle()
-        except asyncio.CancelledError:
-            CRISPY_LOGGER.debug('Cancelled')
-            self.client_pool.channel_gone(channel)
-        finally:
-            self._sockets.remove(channel)
+        self._channels.remove(channel)
+        self.client_pool.channel_gone(channel)
 
-        if not ws.closed:
-            CRISPY_LOGGER.debug('Closed')
-            channel.close()
         return ws
 
     async def shutdown(self):
-        for socket in self._sockets:
+        for socket in self._channels:
             socket.close()
 
 
