@@ -178,6 +178,13 @@ class ClientPool:
             if client.match(message.filters):
                 client.send_message(message)
 
+    async def remove_user(self, uid):
+        try:
+            client = self.unique.pop(uid)
+        except KeyError:
+            return
+        await client.disconnect()
+
 
 class WSChannel:
     def __init__(self, uid, ws, close_timeout):
@@ -334,6 +341,20 @@ class APNSProvider:
             self.config.ttl, self.ttl_expire, token
         )
 
+    async def remove_token(token: str, uid: Optional[str] = None):
+        info = self._tokens.pop(token)
+        if uid is not None:
+            for channel in info.channels:
+                if channel.uid == uid:
+                    break
+            info.channels.remove(channel)
+            self.client_pool.channel_gone(channel)
+            if info.channels:
+                self._tokens[token] = info
+        else:
+            for channel in info.channels:
+                self.client_pool.channel_gone(channel)
+
     def add_message(self, token: str, message):
         self._queue.put_nowait((token, message))
 
@@ -436,8 +457,9 @@ class APNSProvider:
 
 
 async def apns_add_token(request: web.Request) -> web.Response:
-    data = get_signed_data(request, request, request.app['config'].send_secret)
+    get_signed_data(request, request.app['config'].send_secret)
     try:
+        data = await request.json()
         uid = data['uid']
         token = data['token']
         filters = data['filters']
@@ -446,6 +468,30 @@ async def apns_add_token(request: web.Request) -> web.Response:
             text=json.dumps({'message': 'Invalid request'})
         )
     await request.app['apns'].add_token(uid, token, filters)
+    return web.json_response({'status': 'ok'})
+
+
+async def apns_remove_token(request: web.Request) -> web.Response:
+    get_signed_data(request, request.app['config'].send_secret)
+    try:
+        token = request.match_info['token']
+        assert token
+    except (KeyError, AssertionError):
+        raise web.HTTPBadRequest(
+            text=json.dumps({'message': 'Invalid request'})
+        )
+    try:
+        data = await request.json()
+    except:
+        data = {}
+    await request.app['apns'].remove_token(token, data.get('uid'))
+    return web.json_response({'status': 'ok'})
+
+
+async def remove_user(request: web.Request) -> web.Response:
+    get_signed_data(request, request.app['config'].send_secret)
+    uid = request.match_info['uid']
+    request.app['clients'].remove_user(uid)
     return web.json_response({'status': 'ok'})
 
 
@@ -521,7 +567,9 @@ def run_server() -> None:
 
     application.router.add_get('/message', ws_provider.ws_connect)
     application.router.add_post('/message', send_message)
-    application.router.add_post('/apns/add_token', apns_add_token)
+    application.router.add_post('/apns/token', apns_add_token)
+    application.router.add_delete('/apns/token/{token}', apns_remove_token)
+    application.router.add_delete('/user/{uid}', remove_user)
 
     web.run_app(
         application, **vars(config.server)
