@@ -138,7 +138,6 @@ class Client:
     async def disconnect(self):
         futures = []
         for channel in self.channels:
-            channel.need_unregister = False
             futures.append(channel.close())
         await asyncio.wait(futures)
 
@@ -233,6 +232,7 @@ class WSChannel:
                 self._ws_read = asyncio.ensure_future(self.ws.receive())
 
     async def close(self, wait=True):
+        self.need_unregister = False
         if not self.ws.closed:
             await self.ws.close()
         if wait:
@@ -296,7 +296,6 @@ class APNSChannel:
         self.uid = uid
         self.token = token
         self.provider = provider
-        self.need_unregister = True
 
         self._closed = asyncio.Event()
 
