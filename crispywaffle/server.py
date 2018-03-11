@@ -1,22 +1,19 @@
 #!env/bin/python3
-
 import argparse
 import asyncio
 import json
 import logging
 import time
-from datetime import datetime
 import typing
-from typing import Optional, Set, Tuple, NamedTuple  # pylint: disable=unused-import
+from typing import Optional, NamedTuple
+import uuid
 
-import jwt
 import aiohttp
-from aiohttp import web
-from aiohttp.helpers import AccessLogger
+from aiohttp import web, helpers
+import aioh2
+import jwt
 import yaml
 
-from crispywaffle.client import ClientQueue, match_client
-from crispywaffle.apns import APNS_Client
 
 CRISPY_LOGGER = logging.getLogger("crispy")
 
@@ -35,7 +32,7 @@ class BaseConfig:
 class ServerConfig(BaseConfig):
     host: str = '0.0.0.0'
     port: int = 8080
-    access_log_format: str = AccessLogger.LOG_FORMAT
+    access_log_format: str = helpers.AccessLogger.LOG_FORMAT
 
 
 class WSConfig(BaseConfig):
@@ -48,6 +45,7 @@ class APNSConfig(BaseConfig):
     key_issuer: str
     key_data: str
     topic: str
+    ttl: int = 60 * 60 * 24 * 30
 
 
 class Config(BaseConfig):
@@ -163,20 +161,14 @@ class ClientPool:
             client.channels.append(channel)
 
     def channel_gone(self, channel):
-        try:
-            CRISPY_LOGGER.debug(
-                'Remove channel from user with uid %s', channel.uid
-            )
-            if channel.uid is None:
-                del self.anonimous[channel]
-            else:
-                client = self.unique[channel.uid]
-                client.channels.remove(channel)
-                if not client.channels:
-                    del self.unique[channel.uid]
-        except KeyError:
-            # workaround for disconnected clients
-            pass
+        CRISPY_LOGGER.debug('Remove channel from user with uid %s', channel.uid)
+        if channel.uid is None:
+            del self.anonimous[channel]
+        else:
+            client = self.unique[channel.uid]
+            client.channels.remove(channel)
+            if not client.channels:
+                del self.unique[channel.uid]
 
     def route_message(self, message):
         for client in self.unique.values():
@@ -202,9 +194,7 @@ class WSChannel:
         self._ws_read = None
 
     def __enter__(self):
-        self._close_task = asyncio.ensure_future(
-            self._close_coro(self._close_timeout)
-        )
+        self._close_task = asyncio.ensure_future(self._close_coro())
         self._read_task = asyncio.ensure_future(self._queue.get())
         self._ws_read = asyncio.ensure_future(self.ws.receive())
 
@@ -215,9 +205,10 @@ class WSChannel:
         self._ws_read.cancel()
         if exception_type in (RuntimeError, asyncio.CancelledError):
             return True
+        return None
 
-    async def _close_coro(self, timeout):
-        await asyncio.sleep(timeout)
+    async def _close_coro(self):
+        await asyncio.sleep(self._close_timeout)
         await self.close(wait=False)
 
     async def handle(self):
@@ -236,8 +227,9 @@ class WSChannel:
                 message = done.result()
                 if message.type in WS_CLOSE_TYPES:
                     break
-                CRISPY_LOGGER.debug('Somewhy get data from websocket: %s',
-                                    payload)
+                CRISPY_LOGGER.debug(
+                    'Somewhy get data from websocket: %s', message.data
+                )
                 self._ws_read = asyncio.ensure_future(self.ws.receive())
 
     async def close(self, wait=True):
@@ -293,6 +285,171 @@ class WSProvider:
             await asyncio.wait([channel.close() for channel in self._channels])
 
 
+class TokenInfo:
+    def __init__(self, *channels):
+        self.channels = set(channels)
+        self.ttl_watcher = None
+
+
+class APNSChannel:
+    def __init__(self, uid, token, provider):
+        self.uid = uid
+        self.token = token
+        self.provider = provider
+        self.need_unregister = True
+
+        self._closed = asyncio.Event()
+
+    async def close(self, wait=True):
+        await self.provider.close_channel(self)
+
+    def send(self, message):
+        self.provider.add_message(self.token, message)
+
+
+class APNSProvider:
+    def __init__(self, config, client_pool):
+        self.config = config
+        self.client_pool = client_pool
+
+        self._connection = None
+        self._provider_token = None
+        self._provider_token_iat = 0
+
+        self._tokens = {}
+        self._want_stop = asyncio.Event()
+        self._stopped = asyncio.Event()
+        self._queue = asyncio.Queue()
+        self._loop_task = asyncio.ensure_future(self._queue_loop)
+
+    async def add_token(self, user_id: str, token: str, filters):
+        if token in self._tokens:
+            info = self._tokens[token]
+            info.ttl_watcher.cancel()
+        else:
+            info = self._tokens[token] = TokenInfo()
+        channel = APNSChannel(user_id, token, self)
+        info.channels.add(channel)
+        self.client_pool.update_user(channel, filters)
+        info.ttl_watcher = asyncio.get_event_loop().call_later(
+            self.config.ttl, self.ttl_expire, token
+        )
+
+    def add_message(self, token: str, message):
+        self._queue.put_nowait((token, message))
+
+    def ttl_expire(self, token):
+        channels = self._tokens.pop(token)
+        for channel in channels:
+            self.client_pool.channel_done(channel)
+
+    async def _queue_loop(self):
+        got_msg = asyncio.ensure_future(self._queue.get())
+        want_stop = asyncio.ensure_future(self._want_stop.wait())
+        while not self._want_stop.is_set() and not self._queue.empty():
+            done, _ = asyncio.wait(
+                [want_stop, got_msg],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            done = done.pop()
+            if done is got_msg:
+                token, message = done.result()
+                await self.add_message(token, message)
+                self._queue.task_done()
+                got_msg = asyncio.ensure_future(self._queue.get())
+            elif done is want_stop:
+                # Create dummy future for asyncio.wait compatibility
+                want_stop = asyncio.Future()
+
+        want_stop.cancel()
+        got_msg.cancel()
+        self._stopped.set()
+
+    async def close_channel(self, channel):
+        info = self._tokens[channel.token]
+        info.channels.remove(channel)
+        if not info.channels:
+            info.ttl_watcher.cancel()
+            del self._tokens[channel.token]
+
+    def get_provider_token(self):
+        now = time.time()
+        # Token live time - one hour
+        if (now - self._provider_token_iat) > 3600:
+            self._provider_token_iat = now
+            self._provider_token = jwt.encode(
+                {
+                    'iss': self.config.key_issuer,
+                    'iat': round(now)
+                },
+                self.config.key_data,
+                headers={'kid': self.config.key_id},
+                algorithm='ES256'
+            ).decode()
+        return self._provider_token()
+
+    async def setup_connection(self):
+        self._connection = await aioh2.open_connection(
+            'api.push.apple.com',
+            port=443,
+            ssl=True,
+            functional_timeout=0.1
+        )
+
+    async def send_message(self, token: str, message: Message):
+        if self._connection is None or not self._connection._conn:
+            await self.setup_connection()
+
+        apns_id = str(uuid.uuid4())
+        stream_id = await self._connection.start_request([
+            (':method', 'POST'),
+            (':path', f'/3/device/{token}'),
+            (':scheme', 'https'),
+            ('host', 'api.push.apple.com'),
+            ('authorization', f'bearer {self.get_provider_token()}'),
+            ('apns-id', apns_id),
+            ('apns-topic', self.config.topic)
+        ])
+
+        # TODO: Make valid paylod
+        await self._connection.send_data(
+            stream_id,
+            json.dumps({'aps': {'alert': 'HELLO'}}).encode(),
+            end_stream=True
+        )
+
+        # TODO: do response checks
+        headers = await self._connection.recv_response(stream_id)
+        print('Response headers:', headers)
+        resp = await self._connection.read_stream(stream_id, -1)
+        print('Response body:', resp)
+        trailers = await self._connection.recv_trailers(stream_id)
+        print('Response trailers:', trailers)
+
+        if False:
+            info = self._tokens.pop(token)
+            for channel in info.channels:
+                self.client_pool.channel_gone(channel)
+
+    async def shutdown(self):
+        self._want_stop.set()
+        await self._stopped.wait()
+
+
+async def apns_add_token(request: web.Request) -> web.Response:
+    data = get_signed_data(request, request, request.app['config'].send_secret)
+    try:
+        uid = data['uid']
+        token = data['token']
+        filters = data['filters']
+    except KeyError:
+        raise web.HTTPBadRequest(
+            text=json.dumps({'message': 'Invalid request'})
+        )
+    await request.app['apns'].add_token(uid, token, filters)
+    return web.json_response({'status': 'ok'})
+
+
 async def send_message(request: web.Request) -> web.Response:
     data = get_signed_data(request, request.app['config'].send_secret)
 
@@ -325,63 +482,9 @@ async def send_message(request: web.Request) -> web.Response:
     return web.json_response({"queued": True})
 
 
-async def apns_add_token(request: web.Request) -> web.Response:
-    try:
-        data = await request.json()
-    except:
-        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
-    if data.get('auth') != '4864c003-fdad-49ce-b00e-8d1a2d2774fd':
-        raise web.HTTPUnauthorized(text=json.dumps({'message': 'Bad authorization'}))
-
-    try:
-        request.app.apns_tokens[data['user']] = data['token']
-    except KeyError:
-        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
-
-    return web.json_response({})
-
-
-async def send_push(client, token, message, timeout):
-    if timeout:
-        await asyncio.sleep(timeout)
-    await client.send_message(token, message)
-
-
-async def apns_test_push(request: web.Request) -> web.Response:
-    try:
-        data = await request.json()
-    except:
-        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
-    if data.get('auth') != '4864c003-fdad-49ce-b00e-8d1a2d2774fd':
-        raise web.HTTPUnauthorized(text=json.dumps({'message': 'Bad authorization'}))
-    try:
-        user = data['user']
-        message = data['message']
-    except KeyError:
-        raise web.HTTPBadRequest(text=json.dumps({'message': 'Invalid request'}))
-    try:
-        token = request.app.apns_tokens[user]
-    except KeyError:
-        raise web.HTTPBadRequest(text=json.dumps({'message': 'Missing token'}))
-    try:
-        timeout = float(data['timeout'])
-        assert 0 <= timeout <= 30
-    except (TypeError, KeyError, AssertionError):
-        timeout = None
-
-    asyncio.ensure_future(send_push(
-        request.app.apn_client,
-        token,
-        message,
-        timeout
-    ))
-
-    return web.json_response({'status': 'ok', 'timeout': timeout})
-
-
 async def on_shutdown(app: web.Application):
     CRISPY_LOGGER.debug('Do shutdown')
-    await app['ws'].shutdown()
+    await asyncio.gather(app['ws'].shutdown(), app['apns'].shutdown())
 
 
 def _load_config():
@@ -415,9 +518,11 @@ def run_server() -> None:
     application['config'] = config
     application['clients'] = client_pool = ClientPool()
     application['ws'] = ws_provider = WSProvider(config.ws, client_pool)
+    application['apns'] = APNSProvider(config.apns, client_pool)
 
     application.router.add_get('/message', ws_provider.ws_connect)
     application.router.add_post('/message', send_message)
+    application.router.add_post('/apns/add_token', apns_add_token)
 
     web.run_app(
         application, **vars(config.server)
