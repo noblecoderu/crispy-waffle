@@ -483,15 +483,16 @@ class APNSProvider:
             ('apns-topic', self.config.topic)
         ])
 
-        # TODO: Make valid paylod
         CRISPY_LOGGER.debug('Send request')
-        await self._connection.send_data(
-            stream_id,
-            json.dumps({'aps': {'alert': 'HELLO'}}).encode(),
-            end_stream=True
-        )
+        payload = json.dumps({
+            'aps': {'content-available' 1},
+            'data': {
+                'fil': message.filters,
+                'val': message.payload
+            }
+        }).encode()
+        await self._connection.send_data(stream_id, payload, end_stream=True)
 
-        # TODO: do response checks
         headers = dict(await self._connection.recv_response(stream_id))
         resp = await self._connection.read_stream(stream_id, -1)
         trailers = await self._connection.recv_trailers(stream_id)
