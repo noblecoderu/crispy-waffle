@@ -20,11 +20,20 @@ import yaml
 CRISPY_LOGGER = logging.getLogger("crispy")
 
 
+MAX_TIMEOUT = 3600 * 24 * 14
+
 WS_CLOSE_TYPES = {
     aiohttp.WSMsgType.CLOSE,
     aiohttp.WSMsgType.CLOSING,
     aiohttp.WSMsgType.CLOSED
 }
+
+
+async def sleep(timeout):
+    while timeout > 0:
+        delta = min(timeout, MAX_TIMEOUT)
+        await asyncio.sleep(delta)
+        timeout -= delta
 
 
 class BaseConfig:
@@ -340,7 +349,7 @@ class APNSProvider:
         self._want_stop = asyncio.Event()
         self._stopped = asyncio.Event()
         self._queue = asyncio.Queue()
-        self._loop_task = asyncio.ensure_future(self._queue_loop)
+        self._loop_task = asyncio.ensure_future(self._queue_loop())
 
     async def redis_load(self):
         self._redis = await aioredis.create_redis(self.config.redis)
@@ -373,8 +382,8 @@ class APNSProvider:
         channel = APNSChannel(user_id, token, self)
         info.channels.add(channel)
         self.client_pool.update_user(channel, filters)
-        info.ttl_watcher = asyncio.get_event_loop().call_later(
-            self.config.ttl, self.ttl_expire, token
+        info.ttl_watcher = asyncio.ensure_future(
+            self.ttl_expire(token, self.config.ttl)
         )
 
     def remove_token(self, token: str, uid: Optional[str] = None):
@@ -396,22 +405,25 @@ class APNSProvider:
     def queue_message(self, token: str, message):
         self._queue.put_nowait((token, message))
 
-    def ttl_expire(self, token):
-        channels = self._tokens.pop(token)
-        for channel in channels:
-            self.client_pool.channel_done(channel)
+    async def ttl_expire(self, token, ttl):
+        await sleep(ttl)
+        info = self._tokens.pop(token, None)
+        if info is not None:
+            for channel in info.channels:
+                self.client_pool.channel_done(channel)
 
     async def _queue_loop(self):
         got_msg = asyncio.ensure_future(self._queue.get())
         want_stop = asyncio.ensure_future(self._want_stop.wait())
         while not self._want_stop.is_set() or not self._queue.empty():
-            done, _ = asyncio.wait(
+            done, _ = await asyncio.wait(
                 [want_stop, got_msg],
                 return_when=asyncio.FIRST_COMPLETED
             )
             done = done.pop()
             if done is got_msg:
                 token, message = done.result()
+                CRISPY_LOGGER.debug('Send message %s for %s', message, token)
                 await self.send_message(token, message)
                 self._queue.task_done()
                 got_msg = asyncio.ensure_future(self._queue.get())
@@ -444,7 +456,7 @@ class APNSProvider:
                 headers={'kid': self.config.key_id},
                 algorithm='ES256'
             ).decode()
-        return self._provider_token()
+        return self._provider_token
 
     async def setup_connection(self):
         self._connection = await aioh2.open_connection(
@@ -453,12 +465,14 @@ class APNSProvider:
             ssl=True,
             functional_timeout=0.1
         )
+        CRISPY_LOGGER.debug('Connected')
 
     async def send_message(self, token: str, message: Message):
         if self._connection is None or not self._connection._conn:
             await self.setup_connection()
 
         apns_id = str(uuid.uuid4())
+        CRISPY_LOGGER.debug('Start request')
         stream_id = await self._connection.start_request([
             (':method', 'POST'),
             (':path', f'/3/device/{token}'),
@@ -470,6 +484,7 @@ class APNSProvider:
         ])
 
         # TODO: Make valid paylod
+        CRISPY_LOGGER.debug('Send request')
         await self._connection.send_data(
             stream_id,
             json.dumps({'aps': {'alert': 'HELLO'}}).encode(),
@@ -477,20 +492,23 @@ class APNSProvider:
         )
 
         # TODO: do response checks
-        headers = await self._connection.recv_response(stream_id)
-        print('Response headers:', headers)
+        headers = dict(await self._connection.recv_response(stream_id))
         resp = await self._connection.read_stream(stream_id, -1)
-        print('Response body:', resp)
         trailers = await self._connection.recv_trailers(stream_id)
-        print('Response trailers:', trailers)
 
-        if False:
+        CRISPY_LOGGER.debug('Done send message')
+        try:
+            assert headers['apns-id'] == apns_id
+            assert headers[':status'] == 200
+        except (KeyError, AssertionError):
             with contextlib.suppress(KeyError):
                 self.remove_token(token)
 
     async def shutdown(self):
         self._want_stop.set()
         await self._stopped.wait()
+        for info in self._tokens.values():
+            info.ttl_watcher.cancel()
 
 
 async def apns_add_token(request: web.Request) -> web.Response:

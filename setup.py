@@ -11,7 +11,7 @@ setup(
     include_package_data=True,
     install_requires=[
         "aiohttp~=3.0.0",
-        "aioredis=1.1.0",
+        "aioredis==1.1.0",
         "aioh2==0.2.2",
         "PyJWT==1.5.3",
         "PyYAML==3.12",
