@@ -10,6 +10,7 @@ from typing import Optional, NamedTuple, Dict
 import uuid
 
 import aiohttp
+import aioredis
 from aiohttp import web, helpers
 import aioh2
 import jwt
@@ -47,6 +48,7 @@ class APNSConfig(BaseConfig):
     key_data: str
     topic: str
     ttl: int = 60 * 60 * 24 * 30
+    redis: str = ''
 
 
 class Config(BaseConfig):
@@ -332,12 +334,30 @@ class APNSProvider:
         self._connection = None
         self._provider_token = None
         self._provider_token_iat = 0
+        self._redis = None
 
         self._tokens = {}
         self._want_stop = asyncio.Event()
         self._stopped = asyncio.Event()
         self._queue = asyncio.Queue()
         self._loop_task = asyncio.ensure_future(self._queue_loop)
+
+    async def redis_load(self):
+        self._redis = await aioredis.create_redis(self.config.redis)
+        cursor = b'0'
+        async for token in self._redis.iscan():
+            channels = [
+                APNSChannel(uid, token, self) async for uid in
+                self._redis.isscan(token)
+            ]
+            ttl = await self._redis.ttl(token)
+            info = TokenInfo(*channels)
+            info.ttl_watcher = asyncio.get_event_loop().call_later(
+                ttl, self.ttl_expire, token
+            )
+            for cahnnel in channels:
+                # TODO: load filters from somewhere
+                self.client_pool.update_user(channel, {})
 
     def add_token(
             self,
