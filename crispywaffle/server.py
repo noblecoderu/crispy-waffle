@@ -172,11 +172,11 @@ class ClientPool:
         ) -> None:
         CRISPY_LOGGER.debug('Update user with uid %s', uid)
         if uid is None:
-            if not channels:
+            if len(channels) != 1:
                 raise RuntimeError(
-                    'Empty channels for anonimous client not allowed'
+                    'Channels should contain one element for anonimous client.'
                 )
-            self.anonimous[channel] = Client(filters, list(channels))
+            self.anonimous[channels[0]] = Client(filters, list(channels))
         else:
             if uid in self.unique:
                 client = self.unique[uid]
@@ -471,7 +471,7 @@ class APNSProvider:
 
     async def ttl_expire(self, token, ttl):
         await sleep(ttl)
-        log.debug('TTL expire for %s (%s)', token, ttl)
+        CRISPY_LOGGER.debug('TTL expire for %s (%s)', token, ttl)
         info = self._tokens.pop(token, None)
         if info is not None:
             for channel in info.channels:
