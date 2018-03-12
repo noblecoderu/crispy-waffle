@@ -20,7 +20,7 @@ import yaml
 CRISPY_LOGGER = logging.getLogger("crispy")
 
 
-MAX_TIMEOUT = 3600 * 24 * 14
+MAX_TIMEOUT = (1 << 31) // 1000
 
 WS_CLOSE_TYPES = {
     aiohttp.WSMsgType.CLOSE,
@@ -57,7 +57,6 @@ class APNSConfig(BaseConfig):
     key_data: str
     topic: str
     ttl: int = 60 * 60 * 24 * 30
-    redis: str = ''
 
 
 class Config(BaseConfig):
@@ -65,6 +64,7 @@ class Config(BaseConfig):
     logformat: str = logging.BASIC_FORMAT
 
     send_secret: str
+    redis: str = ''
     server: ServerConfig
     ws: WSConfig
     apns: APNSConfig
@@ -158,20 +158,65 @@ class ClientPool:
     def __init__(self):
         self.unique = {}
         self.anonimous = {}
+        self._redis = None
 
-    def update_user(self, channel, filters: Dict[str, str]) -> None:
-        CRISPY_LOGGER.debug('Update user with uid %s', channel.uid)
-        if channel.uid is None:
-            self.anonimous[channel] = Client(filters, [channel])
+    def set_redis(self, redis):
+        self._redis = redis
+
+    async def update_user(
+            self,
+            uid: Optional[str],
+            filters: Dict[str, str],
+            *channels,
+            ttl: Optional[int] = None
+        ) -> None:
+        CRISPY_LOGGER.debug('Update user with uid %s', uid)
+        if uid is None:
+            if not channels:
+                raise RuntimeError(
+                    'Empty channels for anonimous client not allowed'
+                )
+            self.anonimous[channel] = Client(filters, list(channels))
         else:
-            if channel.uid in self.unique:
-                client = self.unique[channel.uid]
+            if uid in self.unique:
+                client = self.unique[uid]
                 client.filters = filters
             else:
-                self.unique[channel.uid] = client = Client(filters)
-            client.channels.append(channel)
+                self.unique[uid] = client = Client(filters)
+            client.channels.extend(channels)
+            if ttl is not None and self._redis is not None:
+                key = f'filters:{uid}'
+                await self._redis.set(key, json.dumps(filters))
+                await self._redis.expire(key, ttl)
 
-    def channel_gone(self, channel):
+    def add_channel(self, uid, *channels):
+        client = self.unique[uid]
+        client.channels.extend(channels)
+
+    async def clean_clients(self):
+        new_unique = {}
+        to_remove = []
+        for uid, client in self.unique.items():
+            if client.channels:
+                new_unique[uid] = client
+            else:
+                to_remove.append(uid)
+
+        self.unique = new_unique
+        if self._redis is not None and to_remove:
+            await self._redis.unlink(*map('filters:{}'.format, to_remove))
+
+    async def load_from_cache(self):
+        async for key in self._redis.iscan(match='filters:*'):
+            try:
+                filters = json.loads(await self._redis.get(key))
+            except json.JSONDecodeError:
+                await self._redis.unlink(key)
+                continue
+            uid = key.split(':')[1]
+            self.unique[uid] = Client(filters)
+
+    async def channel_gone(self, channel):
         CRISPY_LOGGER.debug(
             'Remove channel from user with uid %s', channel.uid
         )
@@ -182,6 +227,8 @@ class ClientPool:
             client.channels.remove(channel)
             if not client.channels:
                 del self.unique[channel.uid]
+                if self._redis is not None:
+                    await self._redis.unlink(f'filters:{channel.uid}')
 
     def route_message(self, message: Message):
         for client in self.unique.values():
@@ -302,12 +349,12 @@ class WSProvider:
         uid = data.get('uid')
         channel = WSChannel(uid, ws, exp-now)
         self._channels.append(channel)
-        self.client_pool.update_user(channel, filters)
+        await self.client_pool.update_user(uid, filters, channel)
         with channel:
             await channel.handle()
         self._channels.remove(channel)
         if channel.notify_pool:
-            self.client_pool.channel_gone(channel)
+            await self.client_pool.channel_gone(channel)
 
         return ws
 
@@ -351,24 +398,29 @@ class APNSProvider:
         self._queue = asyncio.Queue()
         self._loop_task = asyncio.ensure_future(self._queue_loop())
 
-    async def redis_load(self):
-        self._redis = await aioredis.create_redis(self.config.redis)
-        cursor = b'0'
-        async for token in self._redis.iscan():
+    def set_redis(self, redis):
+        self._redis = redis
+
+    async def load_from_cache(self):
+        async for key in self._redis.iscan(match='apns:*'):
+            token = key.split(':')[1]
             channels = [
                 APNSChannel(uid, token, self) async for uid in
-                self._redis.isscan(token)
+                self._redis.isscan(key)
             ]
             ttl = await self._redis.ttl(token)
             info = TokenInfo(*channels)
-            info.ttl_watcher = asyncio.get_event_loop().call_later(
-                ttl, self.ttl_expire, token
+            info.ttl_watcher = asyncio.ensure_future(
+                self.ttl_expire(token, ttl)
             )
-            for cahnnel in channels:
-                # TODO: load filters from somewhere
-                self.client_pool.update_user(channel, {})
+            self._tokens[token] = info
+            for channel in channels:
+                try:
+                    self.client_pool.add_channel(channel.uid, channel)
+                except KeyError:
+                    await self._redis.srem(key, channel.uid)
 
-    def add_token(
+    async def add_token(
             self,
             user_id: str,
             token: str,
@@ -381,12 +433,18 @@ class APNSProvider:
             info = self._tokens[token] = TokenInfo()
         channel = APNSChannel(user_id, token, self)
         info.channels.add(channel)
-        self.client_pool.update_user(channel, filters)
+        await self.client_pool.update_user(
+            user_id, filters, channel, ttl=self.config.ttl
+        )
         info.ttl_watcher = asyncio.ensure_future(
             self.ttl_expire(token, self.config.ttl)
         )
+        if self._redis is not None:
+            key = f'apns:{token}'
+            await self._redis.sadd(key, user_id)
+            await self._redis.expire(key, self.config.ttl)
 
-    def remove_token(self, token: str, uid: Optional[str] = None):
+    async def remove_token(self, token: str, uid: Optional[str] = None):
         info = self._tokens.pop(token)
         if uid is not None:
             for channel in info.channels:
@@ -395,22 +453,27 @@ class APNSProvider:
             else:
                 return
             info.channels.remove(channel)
-            self.client_pool.channel_gone(channel)
+            await self.client_pool.channel_gone(channel)
             if info.channels:
                 self._tokens[token] = info
+            if self._redis is not None:
+                await self._redis.srem(f'apns:{token}', uid)
         else:
             for channel in info.channels:
-                self.client_pool.channel_gone(channel)
+                await self.client_pool.channel_gone(channel)
+            if self._redis is not None:
+                await self._redis.delete(f'apns:{token}')
 
     def queue_message(self, token: str, message):
         self._queue.put_nowait((token, message))
 
     async def ttl_expire(self, token, ttl):
         await sleep(ttl)
+        log.debug('TTL expire for %s (%s)', token, ttl)
         info = self._tokens.pop(token, None)
         if info is not None:
             for channel in info.channels:
-                self.client_pool.channel_done(channel)
+                await self.client_pool.channel_gone(channel)
 
     async def _queue_loop(self):
         got_msg = asyncio.ensure_future(self._queue.get())
@@ -441,6 +504,8 @@ class APNSProvider:
         if not info.channels:
             info.ttl_watcher.cancel()
             del self._tokens[channel.token]
+        if self._redis is not None:
+            await self._redis.srem(f'apns:{channel.token}', channel.uid)
 
     def get_provider_token(self):
         now = time.time()
@@ -485,7 +550,7 @@ class APNSProvider:
 
         CRISPY_LOGGER.debug('Send request')
         payload = json.dumps({
-            'aps': {'content-available' 1},
+            'aps': {'content-available': 1},
             'data': {
                 'fil': message.filters,
                 'val': message.payload
@@ -507,9 +572,9 @@ class APNSProvider:
                 with contextlib.suppress(KeyError):
                     self.remove_token(token)
             else:
-                CRISPY_LOGGER.error('APNS got response[%s]: %s', status, resp)
+                CRISPY_LOGGER.error('APNS got response[%s]: %s', status, resp)
         elif status != 200:
-            CRISPY_LOGGER.error('APNS got response[%s]: %s', status, resp)
+            CRISPY_LOGGER.error('APNSgot response[%s]: %s', status, resp)
 
     async def shutdown(self):
         self._want_stop.set()
@@ -529,7 +594,7 @@ async def apns_add_token(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(
             text=json.dumps({'message': 'Invalid request'})
         )
-    request.app['apns'].add_token(uid, token, filters)
+    await request.app['apns'].add_token(uid, token, filters)
     return web.json_response({'status': 'ok'})
 
 
@@ -547,7 +612,7 @@ async def apns_remove_token(request: web.Request) -> web.Response:
     except:
         data = {}
     try:
-        request.app['apns'].remove_token(token, data.get('uid'))
+        await request.app['apns'].remove_token(token, data.get('uid'))
     except KeyError:
         return web.json_response({'error': 'no token'})
     return web.json_response({'status': 'ok'})
@@ -595,9 +660,34 @@ async def send_message(request: web.Request) -> web.Response:
     return web.json_response({"queued": True})
 
 
+async def short_user_info(request: web.Request) -> web.Response:
+    get_signed_data(request, request.app['config'].send_secret)
+    return web.json_response({
+        uid: len(client.channels) for uid, client
+        in request.app['clients'].unique.items()
+    })
+
+
+async def on_startup(app: web.Application):
+    if app['config'].redis:
+        app['redis'] = redis = await aioredis.create_redis(
+            app['config'].redis, encoding='utf-8'
+        )
+        app['clients'].set_redis(redis)
+        await app['clients'].load_from_cache()
+        app['apns'].set_redis(redis)
+        await app['apns'].load_from_cache()
+        await app['clients'].clean_clients()
+
+
 async def on_shutdown(app: web.Application):
     CRISPY_LOGGER.debug('Do shutdown')
-    await asyncio.gather(app['ws'].shutdown(), app['apns'].shutdown())
+    app['redis'].close()
+    await asyncio.gather(
+        app['ws'].shutdown(),
+        app['apns'].shutdown(),
+        app['redis'].wait_closed()
+    )
 
 
 def _load_config():
@@ -627,6 +717,7 @@ def run_server() -> None:
 
     application = web.Application()
     application.on_shutdown.append(on_shutdown)
+    application.on_startup.append(on_startup)
 
     application['config'] = config
     application['clients'] = client_pool = ClientPool()
@@ -638,6 +729,7 @@ def run_server() -> None:
     application.router.add_post('/apns/token', apns_add_token)
     application.router.add_delete('/apns/token/{token}', apns_remove_token)
     application.router.add_delete('/user/{uid}', remove_user)
+    application.router.add_get('/user', short_user_info)
 
     web.run_app(application, **vars(config.server))
 
