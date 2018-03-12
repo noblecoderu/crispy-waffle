@@ -497,12 +497,18 @@ class APNSProvider:
         trailers = await self._connection.recv_trailers(stream_id)
 
         CRISPY_LOGGER.debug('Done send message')
-        try:
-            assert headers['apns-id'] == apns_id
-            assert headers[':status'] == 200
-        except (KeyError, AssertionError):
-            with contextlib.suppress(KeyError):
-                self.remove_token(token)
+        if headers['apns-id'] != apns_id:
+            CRISPY_LOGGER.debug('Got response with different id')
+        status = int(headers[':status'])
+        if status == 400:
+            payload = json.loads(resp)
+            if resp['reason'] in ('BadDeviceToken', 'DeviceTokenNotForTopic'):
+                with contextlib.suppress(KeyError):
+                    self.remove_token(token)
+            else:
+                CRISPY_LOGGER.error('APNS got response[%s]: %s', status, resp)
+        elif status != 200:
+            CRISPY_LOGGER.error('APNS got response[%s]: %s', status, resp)
 
     async def shutdown(self):
         self._want_stop.set()
