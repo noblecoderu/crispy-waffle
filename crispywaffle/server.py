@@ -410,7 +410,7 @@ class APNSProvider:
                 APNSChannel(uid, token, self) async for uid in
                 self._redis.isscan(key)
             ]
-            ttl = await self._redis.ttl(token)
+            ttl = await self._redis.ttl(key)
             info = TokenInfo(*channels)
             info.ttl_watcher = asyncio.ensure_future(
                 self.ttl_expire(token, ttl)
