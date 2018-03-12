@@ -242,6 +242,8 @@ class ClientPool:
     async def remove_user(self, uid):
         client = self.unique.pop(uid)
         await client.disconnect()
+        if self._redis is not None:
+            await self._redis.delete(f'filters:{uid}')
 
 
 class WSChannel:
