@@ -18,4 +18,4 @@ wheels: clean clean_wheels
 	pip wheel --wheel-dir ./wheels .[netconfig]
 
 docker: wheels
-	docker build --tag crispy-waffle:$(shell python setup.py --version) .
+	docker build --tag crispy-waffle:$(shell python setup.py --version) --tag crispy-waffle:latest .

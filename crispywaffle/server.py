@@ -730,7 +730,7 @@ def _load_config():
         import boto3
         s3 = boto3.client('s3')
         buf = io.BytesIO()
-        s3.download_fileobj(config_url.netloc, config_url.path, buf)
+        s3.download_fileobj(config_url.netloc, config_url.path[1:], buf)
         raw_config = buf.getvalue().decode('utf-8')
 
     config = load_config(Config(), yaml.safe_load(raw_config))
