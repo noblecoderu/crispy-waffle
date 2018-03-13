@@ -554,13 +554,16 @@ class APNSProvider:
         ])
 
         CRISPY_LOGGER.debug('Send request')
-        payload = json.dumps({
+        payload = {
             'aps': {'content-available': 1},
             'data': {
                 'fil': message.filters,
                 'val': message.payload
             }
-        }).encode()
+        }
+        if 'alert' in message.payload:
+            payload['aps']['alert'] = message.payload['alert']
+        payload = json.dumps(payload)
         await self._connection.send_data(stream_id, payload, end_stream=True)
 
         headers = dict(await self._connection.recv_response(stream_id))
