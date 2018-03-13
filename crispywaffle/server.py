@@ -687,12 +687,15 @@ async def on_startup(app: web.Application):
 
 async def on_shutdown(app: web.Application):
     CRISPY_LOGGER.debug('Do shutdown')
-    app['redis'].close()
-    await asyncio.gather(
+    futures = [
         app['ws'].shutdown(),
         app['apns'].shutdown(),
-        app['redis'].wait_closed()
-    )
+    ]
+    if 'redis' in app:
+        app['redis'].close()
+        futures.append(app['redis'].wait_closed())
+
+    await asyncio.gather(futures)
 
 
 def _load_config():
