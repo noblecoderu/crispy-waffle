@@ -675,6 +675,7 @@ async def short_user_info(request: web.Request) -> web.Response:
 
 async def on_startup(app: web.Application):
     if app['config'].redis:
+        CRISPY_LOGGER.info('Use redis for token cache.')
         app['redis'] = redis = await aioredis.create_redis(
             app['config'].redis, encoding='utf-8'
         )
@@ -683,6 +684,8 @@ async def on_startup(app: web.Application):
         app['apns'].set_redis(redis)
         await app['apns'].load_from_cache()
         await app['clients'].clean_clients()
+    else:
+        CRISPY_LOGGER.info('Redis cache is disabled, cause no url specified.')
 
 
 async def on_shutdown(app: web.Application):
