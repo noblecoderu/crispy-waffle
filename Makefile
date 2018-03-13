@@ -15,7 +15,7 @@ clean_wheels:
 
 wheels: clean clean_wheels
 	mkdir wheels | true
-	pip wheel --wheel-dir ./wheels .
+	pip wheel --wheel-dir ./wheels .[netconfig]
 
 docker: wheels
 	docker build --tag crispy-waffle:$(shell python setup.py --version) .
