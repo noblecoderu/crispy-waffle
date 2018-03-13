@@ -596,11 +596,9 @@ async def apns_add_token(request: web.Request) -> web.Response:
         token = data['token']
         filters = data['filters']
     except KeyError:
-        raise web.HTTPBadRequest(
-            text=json.dumps({'message': 'Invalid request'})
-        )
+        return web.json_response({'message': 'Invalid request'}, status=400)
     await request.app['apns'].add_token(uid, token, filters)
-    return web.json_response({'status': 'ok'})
+    return web.sjon_response({'status': 'ok'})
 
 
 async def apns_remove_token(request: web.Request) -> web.Response:
@@ -609,9 +607,7 @@ async def apns_remove_token(request: web.Request) -> web.Response:
         token = request.match_info['token']
         assert token
     except (KeyError, AssertionError):
-        raise web.HTTPBadRequest(
-            text=json.dumps({'message': 'Invalid request'})
-        )
+        return web.json_response({'message': 'Invalid request'}, status=400)
     try:
         data = await request.json()
     except:
@@ -619,7 +615,7 @@ async def apns_remove_token(request: web.Request) -> web.Response:
     try:
         await request.app['apns'].remove_token(token, data.get('uid'))
     except KeyError:
-        return web.json_response({'error': 'no token'})
+        return web.json_response({'message': 'no token'}, status=400)
     return web.json_response({'status': 'ok'})
 
 
@@ -629,7 +625,7 @@ async def remove_user(request: web.Request) -> web.Response:
     try:
         await request.app['clients'].remove_user(uid)
     except KeyError:
-        return web.json_response({'error': 'no user'})
+        return web.json_response({'message': 'no user'}, status=410)
     return web.json_response({'status': 'ok'})
 
 
@@ -638,7 +634,9 @@ async def send_message(request: web.Request) -> web.Response:
 
     signed_filters: dict = data.get('fil')
     if signed_filters and not isinstance(signed_filters, dict):
-        raise web.HTTPBadRequest(text="Invalid signed filters")
+        return web.json_response(
+            {'message': "Invalid signed filters"}, status=400
+        )
     else:
         signed_filters = {}
 
@@ -647,16 +645,22 @@ async def send_message(request: web.Request) -> web.Response:
         assert isinstance(payload, dict)
     except (json.JSONDecodeError, AssertionError) as exc:
         CRISPY_LOGGER.debug("Message rejected, %s", exc)
-        raise web.HTTPBadRequest(text=f'Invalid message body: {exc}')
+        return web.json_response(
+            {'message': f'Invalid message body: {exc}'}, status=400
+        )
 
     CRISPY_LOGGER.debug('Received message: %s', payload)
 
     if 'val' not in payload:
-        raise web.HTTPBadRequest(text="No message value provided")
+        return web.json_response(
+            {"message": "No message value provided"}, status=400
+        )
 
     custom_filters: dict = payload.get("fil") or {}
     if custom_filters and not isinstance(custom_filters, dict):
-        raise web.HTTPBadRequest(text="Invalid custom filters")
+        return web.json_response(
+            {'message': "Invalid custom filters"}, status=400
+        )
 
     custom_filters.update(signed_filters)
     message = Message(payload['val'], custom_filters)
