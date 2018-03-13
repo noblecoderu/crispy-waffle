@@ -702,7 +702,7 @@ async def on_shutdown(app: web.Application):
         app['redis'].close()
         futures.append(app['redis'].wait_closed())
 
-    await asyncio.gather(futures)
+    await asyncio.gather(*futures)
 
 
 def _load_config():
