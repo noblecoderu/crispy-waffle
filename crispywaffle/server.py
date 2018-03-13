@@ -2,11 +2,14 @@
 import argparse
 import asyncio
 import contextlib
+import io
 import json
 import logging
+import os
 import time
 import typing
 from typing import Optional, NamedTuple, Dict
+import urllib.parse
 import uuid
 
 import aiohttp
@@ -695,16 +698,37 @@ async def on_shutdown(app: web.Application):
 def _load_config():
     parser = argparse.ArgumentParser("Message queue with JWT authentication")
     parser.add_argument(
-        "--config", required=True, type=argparse.FileType('rb')
+        "--config", default=os.environ.get('CRISPYWAFFLE_CONFIG', ''),
+        help='Config file path. URL format. May http[s], file or s3.'
     )
     parser.add_argument(
-        "--debug", action="store_const", dest="loglevel", const=logging.DEBUG
+        "--loglevel", help='Python log level. May be string or number.'
     )
     args = parser.parse_args()
 
-    config = load_config(Config(), yaml.safe_load(args.config))
-    if args.loglevel is not None:
-        config.loglevel = args.loglevel
+    config_url = urllib.parse.urlparse(args.config, 'file')
+    if config_url.scheme == 'file':
+        with open(config_url.path, 'r', encoding='utf-8') as config_file:
+            raw_config = config_file.read()
+    elif config_url.scheme in ('http', 'https'):
+        import requests
+        raw_config = requests.get(args.config).content.decode('utf-8')
+    elif config_url.scheme == 's3':
+        import boto3
+        s3 = boto3.client('s3')
+        buf = io.BytesIO()
+        s3.download_fileobj(config_url.netloc, config_url.path, buf)
+        raw_config = buf.getvalue().decode('utf-8')
+
+    config = load_config(Config(), yaml.safe_load(raw_config))
+
+    loglevel = args.loglevel or os.environ.get('CRISPYWAFFLE_LOGLEVEL')
+    if loglevel:
+        if loglevel.isdigit():
+            config.loglevel = int(loglevel)
+        elif hasattr(logging, loglevel):
+            config.loglevel = getattr(logging, loglevel)
+
     validate_require(config)
     return config
 

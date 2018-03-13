@@ -16,6 +16,9 @@ setup(
         "PyJWT==1.5.3",
         "PyYAML==3.12",
     ],
+    extras_require={
+        'netconfig': ['boto3', 'requests'],
+    },
     entry_points={
         'console_scripts': [
             "crispy-waffle = crispywaffle.server:run_server",
