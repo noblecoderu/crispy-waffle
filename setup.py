@@ -14,7 +14,7 @@ setup(
         "aioredis==1.1.0",
         "aioh2==0.2.2",
         "PyJWT==1.5.3",
-        "PyYAML==3.12",
+        "PyYAML>=4.2b1",
     ],
     extras_require={
         'netconfig': ['boto3', 'requests'],

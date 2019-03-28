@@ -1,9 +1,13 @@
-FROM python:3.6-slim
+FROM python:3.7
 
-COPY wheels /tmp/wheels/
+RUN pip install --no-cache-dir --upgrade pip
 
-RUN pip install /tmp/wheels/*.whl
+COPY requirements.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm -rf /tmp/requirements.txt
 
-CMD ["crispy-waffle"]
+COPY . /tmp/build/
+RUN pip install --no-index /tmp/build && rm -rf /tmp/build
 
-EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/crispy-waffle"]
+
+EXPOSE 8000
