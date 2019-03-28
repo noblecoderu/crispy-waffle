@@ -1,5 +1,2 @@
-aiohttp~=3.0.0
-aioredis==1.1.0
-aioh2==0.2.2
-PyJWT==1.5.3
-PyYAML>=4.2b1
+aiohttp==3.5.4
+PyJWT==1.7.1

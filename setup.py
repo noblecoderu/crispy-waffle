@@ -10,18 +10,15 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
-        "aiohttp~=3.0.0",
-        "aioredis==1.1.0",
-        "aioh2==0.2.2",
-        "PyJWT==1.5.3",
-        "PyYAML>=4.2b1",
+        "aiohttp==3.5.4",
+        "PyJWT==1.7.1"
     ],
     extras_require={
         'netconfig': ['boto3', 'requests'],
     },
     entry_points={
         'console_scripts': [
-            "crispy-waffle = crispywaffle.server:run_server",
+            "crispy-waffle = crispywaffle.main:run_server",
             "crispy-utils = crispywaffle.utils:run_utils"
         ],
     },
