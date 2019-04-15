@@ -136,14 +136,15 @@ async def short_user_info(request: web.Request) -> web.Response:
     match_params = dict(request.query)
     match_params.pop("token", None)
 
-    matched = request.app['clients'].match_clients(match_params)
+    matched = [
+        client.filters for client
+        in request.app['clients'].matching_clients_iter(match_params)
+    ]
 
     if request.method == 'HEAD':
         return web.json_response(headers={'X-Count': str(len(matched))})
     if request.method == 'GET':
         return web.json_response(
-            {
-                uid: len(client.channels) for uid, client in matched
-            },
+            matched,
             headers={'X-Count': str(len(matched))}
         )

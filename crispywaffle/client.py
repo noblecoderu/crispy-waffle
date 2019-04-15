@@ -1,6 +1,6 @@
 import logging
 from asyncio import Queue
-from typing import TYPE_CHECKING, Any, Dict, Set
+from typing import TYPE_CHECKING, Any, Dict, Set, Iterator
 
 QUEUE_LOGGER = logging.getLogger("crispy.ClientQueue")
 
@@ -47,7 +47,7 @@ class ClientPool:
     def discard_client(self, client: "Client"):
         self.clients.discard(client)
 
-    def matching_clients_iter(self, match: Dict):
+    def matching_clients_iter(self, match: Dict) -> Iterator["Client"]:
         for client in self.clients:
             if client.match(match):
                 yield client
