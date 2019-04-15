@@ -7,7 +7,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 def setup_routes(application: "web.Application"):
-    application.router.add_route('GET', '/message', application["ws_provider"].ws_connect)
+    application.router.add_route('GET', '/message', views.listen_stream)
     application.router.add_route('POST', '/message', views.send_message)
     application.router.add_route('DELETE', '/user/{uid}', views.remove_user)
     application.router.add_route('HEAD', '/user', views.short_user_info)

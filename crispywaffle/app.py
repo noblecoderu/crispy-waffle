@@ -1,6 +1,6 @@
 from aiohttp import web
 
-from .server import ClientPool, WSProvider
+from .client import ClientPool
 from .stats import GraphiteStatPusher, StatCollector
 
 
@@ -9,8 +9,7 @@ def build_app(config) -> web.Application:
 
     application["config"] = config
     application["stats"] = StatCollector()
-    application["clients"] = client_pool = ClientPool()
-    application["ws_provider"] = WSProvider(config.listen_secret, client_pool)
+    application["clients"] = ClientPool()
 
     application["send_secret"] = config.send_secret
     application["ping_delay"] = config.ping_delay

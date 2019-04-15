@@ -1,7 +1,11 @@
+import asyncio
 import json
+from calendar import timegm
+from datetime import datetime
 
 from aiohttp import web
 
+from crispywaffle.client import Client
 from crispywaffle.models import Message
 
 from .functions import get_signed_data, signed_data
@@ -16,6 +20,63 @@ async def remove_user(request: web.Request) -> web.Response:
     except KeyError:
         return web.json_response({'message': 'no user'}, status=410)
     return web.json_response({'status': 'ok'})
+
+
+async def listen_stream(request: web.Request) -> web.WebSocketResponse:
+    data = get_signed_data(request, request.app["listen_secret"], require_exp=True)
+
+    websocket = web.WebSocketResponse()
+    await websocket.prepare(request)
+
+    exp: int = data["exp"]
+    now: int = timegm(datetime.utcnow().utctimetuple())
+
+    if exp - now < 5:
+        CRISPY_LOGGER.debug("Client disconnected, expiration too soon")
+        raise web.HTTPBadRequest(text="Expiration too soon")
+
+    filters = data.get("fil")
+    if not isinstance(filters, dict):
+        CRISPY_LOGGER.debug("Client disconnected, invalid filters")
+        raise web.HTTPBadRequest(text="Invalid filters")
+
+    CRISPY_LOGGER.debug("Client loop started")
+    with Client(filters, request.app["clients"]) as client:
+        while not websocket.closed:
+            queue_get = asyncio.Task(client.queue.get())
+            ping_sleep = asyncio.Task(asyncio.sleep(request.app["ping_delay"]))
+
+            try:
+                done, pending = await asyncio.wait(
+                    [ping_sleep, queue_get],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+            except asyncio.CancelledError:
+                ping_sleep.cancel()
+                queue_get.cancel()
+                CRISPY_LOGGER.debug("WebSocket closed by client")
+                break
+
+            if done is ping_sleep:
+                await websocket.ping()
+            elif done is queue_get:
+                data = queue_get.result()
+                await websocket.send_json(data)
+                CRISPY_LOGGER.debug("Sending data to client")
+
+            for task in pending:
+                task.cancel()
+
+    # noinspection PyBroadException
+    try:
+        await websocket.close()
+    except RuntimeError:
+        pass
+    except Exception:  # pylint: disable=broad-except
+        CRISPY_LOGGER.exception("Error closing client connection")
+
+    CRISPY_LOGGER.debug("Client loop finished")
+    return websocket
 
 
 @signed_data
@@ -57,9 +118,7 @@ async def send_message(request: web.Request) -> web.Response:
     custom_filters.update(signed_filters)
     message = Message(payload['val'], custom_filters)
 
-    request.app['clients'].route_message(
-        message=message,
-        stats=request.app["stats"])
+    request.app["clients"].put_message(message)
     return web.json_response({"queued": True})
 
 
@@ -75,7 +134,7 @@ async def short_user_info(request: web.Request) -> web.Response:
     if request.method == 'GET':
         return web.json_response(
             {
-                uid: len(client.channels) for uid, client in matched,
+                uid: len(client.channels) for uid, client in matched
             },
             headers={'X-Count': str(len(matched))}
         )
