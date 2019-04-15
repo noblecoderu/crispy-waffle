@@ -51,15 +51,17 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
                     [ping_sleep, queue_get],
                     return_when=asyncio.FIRST_COMPLETED
                 )
+                completed_task: asyncio.Task = done.pop()
             except asyncio.CancelledError:
                 ping_sleep.cancel()
                 queue_get.cancel()
                 CRISPY_LOGGER.debug("WebSocket closed by client")
                 break
 
-            if done is ping_sleep:
+            if completed_task is ping_sleep:
                 await websocket.ping()
-            elif done is queue_get:
+                await websocket.send_json({"hue": "hue"})
+            elif completed_task is queue_get:
                 data = queue_get.result()
                 await websocket.send_json(data)
                 CRISPY_LOGGER.debug("Sending data to client")

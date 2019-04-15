@@ -12,6 +12,7 @@ def build_app(config) -> web.Application:
     application["clients"] = ClientPool()
 
     application["send_secret"] = config.send_secret
+    application["listen_secret"] = config.listen_secret
     application["ping_delay"] = config.ping_delay
 
     if config.graphite:
