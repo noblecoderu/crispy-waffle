@@ -64,9 +64,13 @@ async def send_message(request: web.Request) -> web.Response:
 
 async def short_user_info(request: web.Request) -> web.Response:
     get_signed_data(request, request.app["send_secret"])
+
+    match_params = dict(request.query)
+    match_params.pop("token", None)
+
     return web.json_response({
         uid: len(client.channels) for uid, client
-        in request.app['clients'].unique.items()
+        in request.app['clients'].match_clients(match_params)
     })
 
 
