@@ -28,3 +28,15 @@ def get_signed_data(
         raise web.HTTPBadRequest(text="No exp provided")
 
     return data
+
+
+def signed_data(func):
+    def wrapper(request: web.Request):
+        data = get_signed_data(
+            request=request,
+            key=request.app["send_secret"]
+        )
+        request["signed_data"] = data
+        return func(request)
+
+    return wrapper

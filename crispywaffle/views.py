@@ -4,12 +4,12 @@ from aiohttp import web
 
 from crispywaffle.models import Message
 
-from .functions import get_signed_data
+from .functions import get_signed_data, signed_data
 from .logger import CRISPY_LOGGER
 
 
+@signed_data
 async def remove_user(request: web.Request) -> web.Response:
-    get_signed_data(request, request.app["send_secret"])
     uid = request.match_info['uid']
     try:
         await request.app['clients'].remove_user(uid)
@@ -18,9 +18,10 @@ async def remove_user(request: web.Request) -> web.Response:
     return web.json_response({'status': 'ok'})
 
 
+@signed_data
 async def send_message(request: web.Request) -> web.Response:
     request.app["stats"].push_message_received()
-    data = get_signed_data(request, request.app["send_secret"])
+    data = request["signed_data"]
 
     signed_filters: dict = data.get('fil')
     if signed_filters and not isinstance(signed_filters, dict):
@@ -62,9 +63,8 @@ async def send_message(request: web.Request) -> web.Response:
     return web.json_response({"queued": True})
 
 
+@signed_data
 async def short_user_info(request: web.Request) -> web.Response:
-    get_signed_data(request, request.app["send_secret"])
-
     match_params = dict(request.query)
     match_params.pop("token", None)
 
@@ -74,8 +74,9 @@ async def short_user_info(request: web.Request) -> web.Response:
     })
 
 
+@signed_data
 async def match_user(request: web.Request) -> web.Response:
-    data: dict = get_signed_data(request, request.app['config'].send_secret)
+    data: dict = request["signed_data"]
 
     signed_filters: dict = data.get('fil')
     if signed_filters and not isinstance(signed_filters, dict):
