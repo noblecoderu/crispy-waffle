@@ -112,7 +112,8 @@ async def send_message(request: web.Request) -> web.Response:
             {'message': f'Invalid message body: {exc}'}, status=400
         )
 
-    CRISPY_LOGGER.debug('Received message: %s', payload)
+    message_uuid = uuid4()
+    CRISPY_LOGGER.debug('Received message [%s]: %s', message_uuid, payload)
 
     if 'val' not in payload:
         return web.json_response(
@@ -124,9 +125,6 @@ async def send_message(request: web.Request) -> web.Response:
         return web.json_response(
             {"message": "Invalid custom filters"}, status=400
         )
-
-    message_uuid = uuid4()
-    CRISPY_LOGGER.debug("Set message uuid: %s", message_uuid)
 
     custom_filters.update(signed_filters)
     message = Message(message_uuid, payload["val"], custom_filters)
