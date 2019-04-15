@@ -141,6 +141,19 @@ class ClientPool:
         else:
             stats.push_message_missed()
 
+    def match_clients(self, filters: dict):
+        clients = []
+
+        for client in self.unique.values():
+            if client.match(filters):
+                clients.append(client)
+
+        for client in self.anonymous.values():
+            if client.match(filters):
+                clients.append(client)
+
+        return clients
+
     async def remove_user(self, uid):
         client = self.unique.pop(uid)
         await client.disconnect()
