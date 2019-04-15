@@ -42,8 +42,12 @@ def load_config():
 
     config = parser.parse_args()
 
-    if not config.secret:
-        print("JWT secret not configured!")
+    if not config.listen_secret:
+        print("JWT listen secret not configured!")
+        exit(1)
+
+    if not config.send_secret:
+        print("JWT send secret not configured!")
         exit(1)
 
     return config
