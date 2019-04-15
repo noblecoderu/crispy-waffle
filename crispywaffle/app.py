@@ -10,7 +10,10 @@ def build_app(config) -> web.Application:
     application["config"] = config
     application["stats"] = StatCollector()
     application["clients"] = client_pool = ClientPool()
-    application["ws_provider"] = WSProvider(config.secret, client_pool)
+    application["ws_provider"] = WSProvider(config.listen_secret, client_pool)
+
+    application["send_secret"] = config.send_secret
+    application["ping_delay"] = config.ping_delay
 
     if config.graphite:
         stats_root = config.graphite_stats_root or "crispy-waffle"

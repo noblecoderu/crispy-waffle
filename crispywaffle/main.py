@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 
-import argparse
-import logging
-import os
-
-from aiohttp import web
-
-from crispywaffle.routes import setup_routes
-
-from .app import build_app
-
 
 def load_config():
+    import argparse
+    import os
+
     parser = argparse.ArgumentParser("Message queue with JWT authentication")
 
     parser.add_argument(
-        "--secret",
-        default=os.environ.get("CRISPYWAFFLE_SECRET", None),
-        help="JWT secret")
+        "--send-secret",
+        default=os.environ.get("CRISPYWAFFLE_SEND_SECRET", None),
+        help="JWT send secret")
+    parser.add_argument(
+        "--listen-secret",
+        default=os.environ.get("CRISPYWAFFLE_LISTEN_SECRET", None),
+        help="JWT listen secret")
 
-    parser.add_argument("--loglevel", help='Python log level. May be string or number.')
+    parser.add_argument("--loglevel", help="Python log level. May be string or number.")
     parser.add_argument("--logformat", help="Python log format")
+    parser.add_argument(
+        "--ping-delay",
+        type=int,
+        default=10,
+        help="Client websocket ping interval")
 
     parser.add_argument(
         "--graphite",
@@ -48,6 +50,11 @@ def load_config():
 
 
 def run_server() -> None:
+    from crispywaffle.app import build_app
+    from crispywaffle.routes import setup_routes
+    from aiohttp import web
+    import logging
+
     config = load_config()
 
     logging.basicConfig(

@@ -9,7 +9,7 @@ from .logger import CRISPY_LOGGER
 
 
 async def remove_user(request: web.Request) -> web.Response:
-    get_signed_data(request, request.app['config'].send_secret)
+    get_signed_data(request, request.app["send_secret"])
     uid = request.match_info['uid']
     try:
         await request.app['clients'].remove_user(uid)
@@ -20,7 +20,7 @@ async def remove_user(request: web.Request) -> web.Response:
 
 async def send_message(request: web.Request) -> web.Response:
     request.app["stats"].push_message_received()
-    data = get_signed_data(request, request.app['config'].send_secret)
+    data = get_signed_data(request, request.app["send_secret"])
 
     signed_filters: dict = data.get('fil')
     if signed_filters and not isinstance(signed_filters, dict):
@@ -62,7 +62,7 @@ async def send_message(request: web.Request) -> web.Response:
 
 
 async def short_user_info(request: web.Request) -> web.Response:
-    get_signed_data(request, request.app['config'].send_secret)
+    get_signed_data(request, request.app["send_secret"])
     return web.json_response({
         uid: len(client.channels) for uid, client
         in request.app['clients'].unique.items()
