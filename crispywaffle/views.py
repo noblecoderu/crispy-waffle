@@ -2,6 +2,7 @@ import asyncio
 import json
 from calendar import timegm
 from datetime import datetime
+from uuid import uuid4
 
 from aiohttp import web
 
@@ -53,7 +54,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
                     [ping_sleep, queue_get, signature_timeout],
                     return_when=asyncio.FIRST_COMPLETED
                 )
-                completed_task: asyncio.Task = done.pop()
+                completed_task: asyncio.Future = done.pop()
             except asyncio.CancelledError:
                 ping_sleep.cancel()
                 queue_get.cancel()
@@ -65,9 +66,9 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
                 await websocket.send_json({"hue": "hue"})
                 queue_get.cancel()
             elif completed_task is queue_get:
-                data = queue_get.result()
-                await websocket.send_json(data)
-                CRISPY_LOGGER.debug("Sending data to client")
+                msg: Message = queue_get.result()
+                await websocket.send_json(msg.payload)
+                CRISPY_LOGGER.debug("Sending %s message to client", msg.uuid)
                 ping_sleep.cancel()
             else:
                 ping_sleep.cancel()
@@ -121,11 +122,14 @@ async def send_message(request: web.Request) -> web.Response:
     custom_filters: dict = payload.get("fil") or {}
     if custom_filters and not isinstance(custom_filters, dict):
         return web.json_response(
-            {'message': "Invalid custom filters"}, status=400
+            {"message": "Invalid custom filters"}, status=400
         )
 
+    message_uuid = uuid4()
+    CRISPY_LOGGER.debug("Set message uuid: %s", message_uuid)
+
     custom_filters.update(signed_filters)
-    message = Message(payload['val'], custom_filters)
+    message = Message(message_uuid, payload["val"], custom_filters)
 
     request.app["clients"].put_message(message)
     return web.json_response({"queued": True})
@@ -138,13 +142,13 @@ async def short_user_info(request: web.Request) -> web.Response:
 
     matched = [
         client.filters for client
-        in request.app['clients'].matching_clients_iter(match_params)
+        in request.app["clients"].matching_clients_iter(match_params)
     ]
 
-    if request.method == 'HEAD':
-        return web.json_response(headers={'X-Count': str(len(matched))})
-    if request.method == 'GET':
+    if request.method == "HEAD":
+        return web.json_response(headers={"X-Count": str(len(matched))})
+    if request.method == "GET":
         return web.json_response(
             matched,
-            headers={'X-Count': str(len(matched))}
+            headers={"X-Count": str(len(matched))}
         )

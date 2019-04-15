@@ -54,4 +54,4 @@ class ClientPool:
 
     def put_message(self, message: "Message"):
         for client in self.matching_clients_iter(message.filters):
-            client.put(message.payload)
+            client.put(message)
