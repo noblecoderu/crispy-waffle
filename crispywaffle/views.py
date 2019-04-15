@@ -28,7 +28,8 @@ async def send_message(request: web.Request) -> web.Response:
             {'message': "Invalid signed filters"}, status=400
         )
 
-    signed_filters = {}
+    if not signed_filters:
+        signed_filters = {}
 
     try:
         payload = await request.json()
