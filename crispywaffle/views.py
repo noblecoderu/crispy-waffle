@@ -40,6 +40,8 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
         CRISPY_LOGGER.debug("Client disconnected, invalid filters")
         raise web.HTTPBadRequest(text="Invalid filters")
 
+    signature_timeout = asyncio.Task(asyncio.sleep(exp - now))
+
     CRISPY_LOGGER.debug("Client loop started")
     with Client(filters, request.app["clients"]) as client:
         while not websocket.closed:
@@ -48,7 +50,7 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
             try:
                 done, pending = await asyncio.wait(
-                    [ping_sleep, queue_get],
+                    [ping_sleep, queue_get, signature_timeout],
                     return_when=asyncio.FIRST_COMPLETED
                 )
                 completed_task: asyncio.Task = done.pop()
@@ -61,13 +63,18 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
             if completed_task is ping_sleep:
                 await websocket.ping()
                 await websocket.send_json({"hue": "hue"})
+                queue_get.cancel()
             elif completed_task is queue_get:
                 data = queue_get.result()
                 await websocket.send_json(data)
                 CRISPY_LOGGER.debug("Sending data to client")
+                ping_sleep.cancel()
+            else:
+                ping_sleep.cancel()
+                queue_get.cancel()
+                break
 
-            for task in pending:
-                task.cancel()
+    signature_timeout.cancel()
 
     # noinspection PyBroadException
     try:
