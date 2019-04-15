@@ -68,46 +68,14 @@ async def short_user_info(request: web.Request) -> web.Response:
     match_params = dict(request.query)
     match_params.pop("token", None)
 
-    return web.json_response({
-        uid: len(client.channels) for uid, client
-        in request.app['clients'].match_clients(match_params)
-    })
+    matched = request.app['clients'].match_clients(match_params)
 
-
-@signed_data
-async def match_user(request: web.Request) -> web.Response:
-    data: dict = request["signed_data"]
-
-    signed_filters: dict = data.get('fil')
-    if signed_filters and not isinstance(signed_filters, dict):
+    if request.method == 'HEAD':
+        return web.json_response(headers={'X-Count': str(len(matched))})
+    if request.method == 'GET':
         return web.json_response(
-            {'message': "Invalid signed filters"}, status=400
+            {
+                uid: len(client.channels) for uid, client in matched,
+            },
+            headers={'X-Count': str(len(matched))}
         )
-    else:
-        signed_filters = {}
-
-    try:
-        payload = await request.json()
-        assert isinstance(payload, dict)
-    except (json.JSONDecodeError, AssertionError) as exc:
-        CRISPY_LOGGER.debug("Message rejected, %s", exc)
-        return web.json_response(
-            {'message': f'Invalid message body: {exc}'}, status=400
-        )
-
-    CRISPY_LOGGER.debug('Received match request: %s', payload)
-
-    custom_filters: dict = payload.get("fil") or {}
-    if custom_filters and not isinstance(custom_filters, dict):
-        return web.json_response(
-            {'message': "Invalid custom filters"}, status=400
-        )
-
-    custom_filters.update(signed_filters)
-    clients = request.app['clients'].match_clients(custom_filters)
-
-    full_response = payload.get('opt', {}).get('full', False)
-    if full_response:
-        return web.json_response([client.filters for client in clients])
-    else:
-        return web.json_response({"matched": len(clients)})
