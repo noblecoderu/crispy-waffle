@@ -63,7 +63,6 @@ async def listen_stream(request: web.Request) -> web.WebSocketResponse:
 
             if completed_task is ping_sleep:
                 await websocket.ping()
-                await websocket.send_json({"hue": "hue"})
                 queue_get.cancel()
             elif completed_task is queue_get:
                 msg: Message = queue_get.result()
