@@ -2,3 +2,8 @@ build
 crispywaffle.egg-info
 dist
 env
+.git
+.idea
+Makefile
+Dockerfile
+README.md
