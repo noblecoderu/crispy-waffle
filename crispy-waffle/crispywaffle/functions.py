@@ -3,7 +3,7 @@ from typing import Optional
 import jwt
 from aiohttp import web
 
-from crispywaffle.logger import CRISPY_LOGGER
+from .logger import CRISPY_LOGGER
 
 
 def get_signed_data(

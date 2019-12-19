@@ -3,9 +3,11 @@
 
 def load_config():
     import argparse
+    import pkg_resources
     import os
 
     parser = argparse.ArgumentParser("Message queue with JWT authentication")
+    parser.set_defaults(post_setup_hooks=[])
 
     parser.add_argument(
         "--send-secret",
@@ -40,7 +42,13 @@ def load_config():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", default=8000)
 
+    for entry_point in pkg_resources.iter_entry_points('crispy_waffle_extra_cmd'):
+        parser_setter = entry_point.load()
+        parser_setter(parser)
+
     config = parser.parse_args()
+    for hook in config.post_setup_hooks:
+        hook(config)
 
     if not config.listen_secret:
         print("JWT listen secret not configured!")
@@ -54,8 +62,8 @@ def load_config():
 
 
 def run_server() -> None:
-    from crispywaffle.app import build_app
-    from crispywaffle.routes import setup_routes
+    from .app import build_app
+    from .routes import setup_routes
     from aiohttp import web
     import logging
 

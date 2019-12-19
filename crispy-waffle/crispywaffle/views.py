@@ -6,8 +6,8 @@ from uuid import uuid4
 
 from aiohttp import web
 
-from crispywaffle.client import Client
-from crispywaffle.models import Message
+from .client import Client
+from .models import Message
 
 from .functions import get_signed_data, signed_data
 from .logger import CRISPY_LOGGER

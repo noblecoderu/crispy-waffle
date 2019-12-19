@@ -7,7 +7,7 @@ QUEUE_LOGGER = logging.getLogger("crispy.ClientQueue")
 
 if TYPE_CHECKING:
     # pylint: disable=unused-import,ungrouped-imports
-    from crispywaffle.models import Message
+    from .models import Message
 
 
 class Client:

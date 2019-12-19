@@ -1,5 +1,6 @@
 build
 crispywaffle.egg-info
+crispywaffle_sentry.egg-info
 dist
 env
 .git
