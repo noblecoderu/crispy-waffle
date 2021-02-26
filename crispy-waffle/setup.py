@@ -10,7 +10,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
-        "aiohttp==3.5.4",
+        "aiohttp==3.7.4",
         "PyJWT==1.7.1"
     ],
     extras_require={
