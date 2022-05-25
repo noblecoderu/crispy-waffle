@@ -11,7 +11,7 @@ setup(
     include_package_data=True,
     install_requires=[
         "aiohttp==3.5.4",
-        "PyJWT==1.7.1"
+        "PyJWT==2.4.0"
     ],
     extras_require={
         'netconfig': ['boto3', 'requests'],
