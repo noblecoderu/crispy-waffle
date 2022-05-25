@@ -1,2 +1,2 @@
 aiohttp==3.5.4
-PyJWT==1.7.1
+PyJWT==2.4.0
